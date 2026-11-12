@@ -1144,7 +1144,9 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_width(460.0)
+            .default_width(480.0)
+            .default_height(640.0)
+            .default_pos(ctx.content_rect().center() - Vec2::new(240.0, 320.0))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.settings_ui(ui));
             });
