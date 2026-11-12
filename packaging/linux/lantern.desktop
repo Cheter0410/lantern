@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Lantern
+Comment=Presentation playback for live shows
+Exec=lantern %f
+Icon=lantern
+Terminal=false
+Categories=Office;Presentation;AudioVideo;
+MimeType=application/vnd.openxmlformats-officedocument.presentationml.presentation;application/pdf;
