@@ -1,0 +1,76 @@
+[workspace]
+members = [".", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[package]
+name = "lantern"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Presentation playback for live shows: PowerPoint files, timecode, NDI"
+authors = ["Cheter"]
+publish = false
+
+[dependencies]
+sm-timecode = { path = "crates/sm-timecode" }
+sm-rtpmidi = { path = "crates/sm-rtpmidi" }
+sm-mdns = { path = "crates/sm-mdns" }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+egui = "0.37"
+hayro = { version = "0.9", features = ["embed-fonts"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde.workspace = true
+serde_json.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
+cpal = "0.15"
+rosc = "0.11"
+libloading = "0.8"
+dirs = "6"
+rfd = "0.15"
+ureq = { version = "2", features = ["native-certs"] }
+sha2 = "0.10"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWindow", "NSResponder", "NSGraphics"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[lints]
+workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false

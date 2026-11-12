@@ -1,0 +1,4 @@
+target/
+dist/
+/testdata/*.png
+/testdata/*.pdf
