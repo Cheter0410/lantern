@@ -44,7 +44,6 @@ pub struct Input {
     status: Arc<Mutex<String>>,
     _stream: Option<cpal::Stream>,
     rtp: Option<sm_rtpmidi::Session>,
-    mdns: Option<sm_mdns::Mdns>,
     level: Arc<Mutex<f32>>,
 }
 
@@ -56,7 +55,6 @@ impl Default for Input {
             status: Arc::new(Mutex::new("Aus".into())),
             _stream: None,
             rtp: None,
-            mdns: None,
             level: Arc::default(),
         }
     }
@@ -76,16 +74,12 @@ impl Input {
         if *cfg == self.cfg
             && (self._stream.is_some() || self.rtp.is_some() || cfg.source == TcSource::Off)
         {
-            if let Some(m) = &mut self.mdns {
-                m.poll();
-            }
             return;
         }
         if let Some(s) = self.rtp.take() {
             s.close();
         }
         self._stream = None;
-        self.mdns = None;
         self.cfg = cfg.clone();
         if let Ok(mut l) = self.latest.lock() {
             *l = Latest::default();
@@ -129,18 +123,9 @@ impl Input {
         })
     }
 
-    /// Other RTP-MIDI sessions on the network (name, address).
-    pub fn discovered(&self) -> Vec<(String, String)> {
-        self.mdns
-            .as_ref()
-            .map(|m| {
-                m.status()
-                    .discovered
-                    .into_iter()
-                    .map(|d| (d.name, d.addr))
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// The local port of the RTP-MIDI session while it runs (to advertise it).
+    pub fn rtp_port(&self) -> Option<u16> {
+        self.rtp.as_ref().map(|s| s.local_addr().port())
     }
 
     pub fn connected(&self) -> Vec<String> {
@@ -205,16 +190,6 @@ impl Input {
                 l.running = running;
             }
         }));
-        let mut mdns = sm_mdns::Mdns::with_options(5353, "lantern", &sm_mdns::computer_name());
-        mdns.apply(&sm_mdns::Desired {
-            http_port: None,
-            rtp: Some(sm_mdns::RtpAdvert {
-                name: self.cfg.rtp_name.clone(),
-                port: session.local_addr().port(),
-            }),
-            browse_rtp: true,
-        });
-        self.mdns = Some(mdns);
         let port = session.local_addr().port();
         self.rtp = Some(session);
         Ok(format!(

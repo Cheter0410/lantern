@@ -7,6 +7,7 @@
 mod app;
 mod deck;
 mod ndi;
+mod net;
 mod office;
 mod osc;
 mod platform;

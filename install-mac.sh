@@ -47,25 +47,28 @@ DMG="dist/Lantern-$V.dmg"
 ui_section "Installieren"
 [ -n "${NO_INSTALL:-}" ] && { ui_ok "Installer: $DMG"; ui_done; exit 0; }
 STAMP=dist/.made/installed-app
+# All show tools share one folder (as Stagehand installs them).
+APPDIR=/Applications/Stagehand
 WANT=$(cat "dist/.made/$(basename "$DMG")" 2>/dev/null || echo none)
-if [ -d /Applications/Lantern.app ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
-  ui_skip "In /Applications" "Lantern $V ist schon installiert"
+if [ -d "$APPDIR/Lantern.app" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
+  ui_skip "In Programme/Stagehand" "Lantern $V ist schon installiert"
 else
   put() {
     pkill -x lantern 2>/dev/null || true
     MNT=$(mktemp -d)
     hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG" >/dev/null
-    rm -rf /Applications/Lantern.app
-    ditto "$MNT/Lantern.app" /Applications/Lantern.app
+    mkdir -p "$APPDIR"
+    rm -rf "$APPDIR/Lantern.app" "/Applications/Lantern.app"
+    ditto "$MNT/Lantern.app" "$APPDIR/Lantern.app"
     hdiutil detach "$MNT" -quiet >/dev/null 2>&1 || true
     rmdir "$MNT" 2>/dev/null || true
-    xattr -dr com.apple.quarantine /Applications/Lantern.app 2>/dev/null || true
+    xattr -dr com.apple.quarantine "$APPDIR/Lantern.app" 2>/dev/null || true
   }
-  ui_run "In /Applications" put
+  ui_run "In Programme/Stagehand" put
   printf '%s' "$WANT" > "$STAMP"
 fi
 
 ui_section "Fertig"
-ui_ok "Lantern ist in Programme (Launchpad, Spotlight)"
+ui_ok "Lantern ist in Programme › Stagehand (Launchpad, Spotlight)"
 ui_done
-open /Applications/Lantern.app
+open "$APPDIR/Lantern.app"

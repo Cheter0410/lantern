@@ -6,7 +6,7 @@ use crate::office::{self, InstallState};
 use crate::osc::{self, Command};
 use crate::pptx::{self, SlideInfo, Transition};
 use crate::show::{self, Chase, Player, Resolution, Show, TcSource, TransitionCfg, Trigger};
-use crate::{ndi, timecode};
+use crate::{ndi, net, timecode};
 use egui::{
     pos2, Align, Color32, CornerRadius, Frame, Key, Layout, Margin, Rect, RichText, Sense, Stroke,
     TextureHandle, Vec2,
@@ -28,6 +28,8 @@ const NEXT: Color32 = Color32::from_rgb(245, 179, 66);
 const TC: Color32 = Color32::from_rgb(96, 165, 250);
 const DANGER: Color32 = Color32::from_rgb(239, 68, 68);
 const AMBER: Color32 = Color32::from_rgb(255, 196, 92);
+const LIVE_BG: Color32 = Color32::from_rgb(18, 44, 30);
+const HOVER: Color32 = Color32::from_rgb(26, 29, 35);
 
 /// App settings kept between starts.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -116,6 +118,8 @@ pub struct App {
     displays: Vec<Disp>,
     displays_at: Instant,
     settings_open: bool,
+    settings_tab: SettingsTab,
+    net: net::Net,
     output_started: Option<Instant>,
     message: Option<(String, Instant)>,
     scroll_to_live: bool,
@@ -157,6 +161,8 @@ impl App {
             displays: Vec::new(),
             displays_at: Instant::now() - Duration::from_secs(10),
             settings_open: false,
+            settings_tab: SettingsTab::default(),
+            net: net::Net::default(),
             output_started: None,
             message: None,
             scroll_to_live: false,
@@ -568,7 +574,7 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (go, back, black, first, open, settings) = ctx.input(|i| {
+        let (go, back, black, first, open, settings, reload, escape) = ctx.input(|i| {
             let any = |ks: &[Key]| ks.iter().any(|k| i.key_pressed(*k));
             (
                 any(&[
@@ -590,8 +596,20 @@ impl App {
                 any(&[Key::Home]),
                 i.modifiers.command && i.key_pressed(Key::O),
                 i.modifiers.command && i.key_pressed(Key::Comma),
+                i.modifiers.command && i.key_pressed(Key::R),
+                i.key_pressed(Key::Escape),
             )
         });
+        if reload && self.deck.is_some() {
+            self.load(ctx);
+        }
+        if escape {
+            if self.settings_open {
+                self.settings_open = false;
+            } else {
+                self.selected = None;
+            }
+        }
         if go {
             self.go();
         }
@@ -678,71 +696,94 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Lantern").size(20.0).strong().color(AMBER));
-            ui.add_space(8.0);
-            let name = self
-                .show
-                .presentation
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Keine Präsentation".into());
-            ui.label(RichText::new(name).color(MUTED));
-            if ui
-                .button("Öffnen…")
-                .on_hover_text("PowerPoint, Keynote, OpenDocument oder PDF (Strg/⌘+O)")
-                .clicked()
-            {
-                self.pick_file(&ctx);
-            }
-            if self.deck.is_some()
-                && ui
-                    .button("Neu laden")
-                    .on_hover_text("Die Präsentation neu einlesen")
-                    .clicked()
-            {
-                self.load(&ctx);
+        ui.horizontal_centered(|ui| {
+            ui.label(RichText::new("Lantern").size(18.0).strong().color(AMBER));
+            ui.add_space(14.0);
+            if self.deck.is_some() || self.loading.is_some() {
+                let name = self
+                    .show
+                    .presentation
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                ui.add(egui::Label::new(RichText::new(name).strong()).truncate());
+                if !self.slides.is_empty() {
+                    ui.label(RichText::new(format!("{} Folien", self.slides.len())).color(MUTED));
+                }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Einstellungen").clicked() {
+                if ui
+                    .add(flat_button("Einstellungen"))
+                    .on_hover_text("Ausgänge, Timecode, Netzwerk (Strg/⌘+,)")
+                    .clicked()
+                {
                     self.settings_open = !self.settings_open;
                 }
-                ui.add_space(6.0);
-                // Outputs.
-                let ndi_ok = self.ndi.is_some();
+                if ui
+                    .add(flat_button("Öffnen"))
+                    .on_hover_text("PowerPoint, Keynote, OpenDocument oder PDF (Strg/⌘+O)")
+                    .clicked()
+                {
+                    self.pick_file(&ctx);
+                }
+                ui.add_space(12.0);
+                ui.label(RichText::new(clock()).monospace().size(15.0).color(MUTED));
+                ui.add_space(8.0);
+                // Outputs and timecode, as quiet status dots.
                 if self.show.output.ndi {
-                    chip(ui, "NDI", if ndi_ok { LIVE } else { DANGER });
+                    let ok = self.ndi.is_some();
+                    status(ui, "NDI", if ok { LIVE } else { DANGER }).on_hover_text(
+                        self.ndi_error
+                            .clone()
+                            .unwrap_or_else(|| format!("Sendet als „{}“", self.ndi_name())),
+                    );
                 }
                 match self.show.output.display {
                     Some(d) if d < self.displays.len() => {
-                        chip(ui, &format!("Bildschirm {}", d + 1), LIVE)
+                        status(ui, &format!("Bildschirm {}", d + 1), LIVE);
                     }
-                    Some(d) => chip(ui, &format!("Bildschirm {} fehlt", d + 1), DANGER),
-                    None => chip(ui, "Kein Ausgang", MUTED),
+                    Some(d) => {
+                        status(ui, &format!("Bildschirm {} fehlt", d + 1), DANGER);
+                    }
+                    None if !self.show.output.ndi => {
+                        let r = status(ui, "Kein Ausgang", MUTED)
+                            .on_hover_text("Klicken: einen Bildschirm oder NDI als Ausgang wählen");
+                        if r.clicked() {
+                            self.settings_open = true;
+                            self.settings_tab = SettingsTab::Output;
+                        }
+                    }
+                    None => {}
                 }
-                ui.add_space(10.0);
-                // Clock and timecode.
-                ui.label(RichText::new(clock()).monospace().size(16.0).color(MUTED));
-                ui.add_space(6.0);
-                let (text, color) = match (self.show.timecode.source, self.tc.reading()) {
-                    (TcSource::Off, _) => ("TC aus".to_string(), MUTED),
-                    (_, None) => ("--:--:--:--".to_string(), MUTED),
-                    (_, Some(r)) => (
-                        show::format_tc(r.secs, r.fps),
-                        if r.running { TC } else { MUTED },
-                    ),
-                };
-                ui.label(
-                    RichText::new(text)
-                        .monospace()
-                        .size(18.0)
-                        .strong()
-                        .color(color),
-                )
-                .on_hover_text(self.tc.status());
+                if self.show.timecode.source != TcSource::Off {
+                    let (text, color) = match self.tc.reading() {
+                        None => ("--:--:--:--".to_string(), MUTED),
+                        Some(r) => (
+                            show::format_tc(r.secs, r.fps),
+                            if r.running { TC } else { MUTED },
+                        ),
+                    };
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(text)
+                            .monospace()
+                            .size(15.0)
+                            .strong()
+                            .color(color),
+                    )
+                    .on_hover_text(self.tc.status());
+                }
             });
         });
+    }
+
+    fn ndi_name(&self) -> String {
+        let n = self.show.output.ndi_name.trim();
+        if n.is_empty() {
+            "Lantern".into()
+        } else {
+            n.into()
+        }
     }
 
     fn slide_list(&mut self, ui: &mut egui::Ui) {
@@ -750,96 +791,130 @@ impl App {
         let mut clicked: Option<usize> = None;
         let mut double: Option<usize> = None;
         let scroll = std::mem::take(&mut self.scroll_to_live);
+        let aspect = self.deck.as_ref().map(|d| d.aspect).unwrap_or(16.0 / 9.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, s) in self.slides.iter().enumerate() {
                     let live = self.player.current == Some(i);
                     let is_next = next == Some(i);
                     let sel = self.selected == Some(i);
-                    let stroke = if live {
-                        Stroke::new(2.0, LIVE)
-                    } else if is_next {
-                        Stroke::new(1.5, NEXT)
+                    let tw = 96.0;
+                    let th = tw / aspect;
+                    let (rect, resp) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), th + 14.0),
+                        Sense::click(),
+                    );
+                    let p = ui.painter();
+                    let fill = if live {
+                        LIVE_BG
                     } else if sel {
-                        Stroke::new(1.5, TC)
+                        CARD
+                    } else if resp.hovered() {
+                        HOVER
                     } else {
-                        Stroke::new(1.0, LINE)
+                        Color32::TRANSPARENT
                     };
-                    let resp = Frame::new()
-                        .fill(if sel { CARD } else { PANEL })
-                        .stroke(stroke)
-                        .corner_radius(CornerRadius::same(6))
-                        .inner_margin(Margin::same(6))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!("{}", i + 1))
-                                        .monospace()
-                                        .strong()
-                                        .color(if live { LIVE } else { MUTED }),
-                                );
-                                let tw = 112.0;
-                                let aspect =
-                                    self.deck.as_ref().map(|d| d.aspect).unwrap_or(16.0 / 9.0);
-                                let (r, _) = ui.allocate_exact_size(
-                                    Vec2::new(tw, tw / aspect),
-                                    Sense::hover(),
-                                );
-                                match self.thumbs.get(&i) {
-                                    Some(t) => {
-                                        ui.painter().image(
-                                            t.id(),
-                                            r,
-                                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                            Color32::WHITE,
-                                        );
-                                    }
-                                    None => {
-                                        ui.painter().rect_filled(r, 2.0, Color32::BLACK);
-                                    }
-                                }
-                                ui.vertical(|ui| {
-                                    let title = if s.title.is_empty() {
-                                        format!("Folie {}", s.number)
-                                    } else {
-                                        s.title.clone()
-                                    };
-                                    ui.add(
-                                        egui::Label::new(RichText::new(title).strong()).truncate(),
-                                    );
-                                    ui.horizontal(|ui| {
-                                        let cfg = self.show.slides.get(i);
-                                        match cfg.map(|c| c.trigger) {
-                                            Some(Trigger::Timecode) => {
-                                                let tc = cfg.map(|c| c.tc.as_str()).unwrap_or("");
-                                                chip(
-                                                    ui,
-                                                    &format!(
-                                                        "TC {}",
-                                                        if tc.is_empty() { "–" } else { tc }
-                                                    ),
-                                                    TC,
-                                                );
-                                            }
-                                            _ => chip(ui, "GO", MUTED),
-                                        }
-                                        if live {
-                                            chip(ui, "LIVE", LIVE);
-                                        } else if is_next {
-                                            chip(ui, "NEXT", NEXT);
-                                        }
-                                        if !s.notes.is_empty() {
-                                            ui.label(RichText::new("Notiz").small().color(MUTED))
-                                                .on_hover_text(&s.notes);
-                                        }
-                                    });
-                                });
-                            });
-                        })
-                        .response
-                        .interact(Sense::click());
+                    p.rect_filled(rect, 6.0, fill);
+                    let accent = if live {
+                        Some(LIVE)
+                    } else if is_next {
+                        Some(NEXT)
+                    } else {
+                        None
+                    };
+                    if let Some(c) = accent {
+                        p.rect_filled(
+                            Rect::from_min_size(rect.min, Vec2::new(3.0, rect.height())),
+                            CornerRadius::same(2),
+                            c,
+                        );
+                    }
+                    if sel {
+                        p.rect_stroke(rect, 6.0, Stroke::new(1.0, AMBER), egui::StrokeKind::Inside);
+                    }
+                    p.text(
+                        rect.left_top() + Vec2::new(12.0, 8.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{}", i + 1),
+                        egui::FontId::monospace(12.0),
+                        accent.unwrap_or(MUTED),
+                    );
+                    let thumb = Rect::from_min_size(
+                        rect.left_top() + Vec2::new(36.0, 7.0),
+                        Vec2::new(tw, th),
+                    );
+                    match self.thumbs.get(&i) {
+                        Some(t) => {
+                            p.image(t.id(), thumb, full_uv(), Color32::WHITE);
+                        }
+                        None => {
+                            p.rect_filled(thumb, 2.0, Color32::BLACK);
+                        }
+                    }
+                    p.rect_stroke(
+                        thumb,
+                        2.0,
+                        Stroke::new(1.0, LINE),
+                        egui::StrokeKind::Outside,
+                    );
+                    // Title (two lines at most) and one quiet line about the trigger.
+                    let tx = thumb.right() + 10.0;
+                    let width = (rect.right() - tx - 8.0).max(20.0);
+                    let title = if s.title.is_empty() {
+                        format!("Folie {}", s.number)
+                    } else {
+                        s.title.clone()
+                    };
+                    let mut job = egui::text::LayoutJob::single_section(
+                        title,
+                        egui::TextFormat::simple(egui::FontId::proportional(14.0), TEXT),
+                    );
+                    job.wrap = egui::text::TextWrapping {
+                        max_width: width,
+                        max_rows: 2,
+                        break_anywhere: false,
+                        overflow_character: Some('…'),
+                    };
+                    let g = p.layout_job(job);
+                    let gh = g.rect.height();
+                    p.galley(pos2(tx, rect.top() + 7.0), g, TEXT);
+                    let cfg = self.show.slides.get(i);
+                    let (meta, mc) = match cfg.map(|c| c.trigger) {
+                        Some(Trigger::Timecode) => {
+                            let tc = cfg.map(|c| c.tc.as_str()).unwrap_or("");
+                            (
+                                format!("TC {}", if tc.is_empty() { "fehlt" } else { tc }),
+                                TC,
+                            )
+                        }
+                        _ => ("GO".to_string(), MUTED),
+                    };
+                    let mut x = tx;
+                    let y = rect.top() + 11.0 + gh;
+                    let r = p.text(
+                        pos2(x, y),
+                        egui::Align2::LEFT_TOP,
+                        meta,
+                        egui::FontId::proportional(11.5),
+                        mc,
+                    );
+                    x = r.right() + 8.0;
+                    if !s.notes.is_empty() {
+                        p.text(
+                            pos2(x, y),
+                            egui::Align2::LEFT_TOP,
+                            "Notiz",
+                            egui::FontId::proportional(11.5),
+                            MUTED,
+                        );
+                    }
+                    let resp = if s.notes.is_empty() {
+                        resp
+                    } else {
+                        resp.on_hover_text(&s.notes)
+                    };
                     if scroll && live {
                         resp.scroll_to_me(Some(Align::Center));
                     }
@@ -848,11 +923,15 @@ impl App {
                     } else if resp.clicked() {
                         clicked = Some(i);
                     }
-                    ui.add_space(4.0);
                 }
             });
         if let Some(i) = clicked {
-            self.selected = Some(i);
+            // Clicking the selected slide again closes its settings.
+            self.selected = if self.selected == Some(i) {
+                None
+            } else {
+                Some(i)
+            };
         }
         if let Some(i) = double {
             self.goto(Some(i));
@@ -866,15 +945,35 @@ impl App {
             let (w, h) = self.output_size();
             w as f32 / h as f32
         };
-        // Live big, next smaller beside it.
-        let live_w = ((avail.x - 24.0) * 0.64).max(200.0);
-        let next_w = ((avail.x - 24.0) * 0.36 - 12.0).max(120.0);
-        let max_h = (avail.y * 0.55).max(120.0);
-        let live_w = live_w.min(max_h * aspect);
-        let next_w = next_w.min(max_h * aspect);
+        let gap = 16.0;
+        // Live big, next smaller beside it; together at most about half the height.
+        let max_h = (avail.y * 0.5).max(120.0);
+        let live_w = ((avail.x - gap) * 0.64).min(max_h * aspect).max(160.0);
+        let next_w = ((avail.x - gap) * 0.36).min(live_w * 0.62).max(100.0);
+        let total = self.slides.len();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new("LIVE").strong().color(LIVE));
+                ui.set_width(live_w);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("LIVE").small().strong().color(LIVE));
+                    let what = match self.player.current {
+                        Some(c) => format!("Folie {} von {total}", c + 1),
+                        None => "Schwarz".into(),
+                    };
+                    ui.label(RichText::new(what).small().color(MUTED));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if self.player.current.is_some() {
+                            let s = self.player.since.elapsed().as_secs();
+                            ui.label(
+                                RichText::new(format!("{}:{:02}", s / 60, s % 60))
+                                    .small()
+                                    .monospace()
+                                    .color(MUTED),
+                            )
+                            .on_hover_text("Zeit auf dieser Folie");
+                        }
+                    });
+                });
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(live_w, live_w / aspect), Sense::hover());
                 paint_output(
@@ -885,150 +984,169 @@ impl App {
                     self.player.mix(),
                     self.player.black_level(),
                 );
-                ui.painter()
-                    .rect_stroke(r, 0.0, Stroke::new(2.0, LIVE), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    r,
+                    4.0,
+                    Stroke::new(2.0, if self.player.blackout { DANGER } else { LIVE }),
+                    egui::StrokeKind::Outside,
+                );
                 if self.player.blackout {
                     ui.painter().text(
                         r.center(),
                         egui::Align2::CENTER_CENTER,
                         "BLACKOUT",
-                        egui::FontId::proportional(28.0),
+                        egui::FontId::proportional(24.0),
                         DANGER,
                     );
                 }
             });
-            ui.add_space(12.0);
+            ui.add_space(gap);
             ui.vertical(|ui| {
-                ui.label(RichText::new("NEXT").strong().color(NEXT));
+                ui.set_width(next_w);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("NEXT").small().strong().color(NEXT));
+                    if let Some(n) = next {
+                        ui.label(
+                            RichText::new(format!("Folie {}", n + 1))
+                                .small()
+                                .color(MUTED),
+                        );
+                    }
+                });
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(next_w, next_w / aspect), Sense::hover());
                 paint_output(ui.painter(), r, None, self.tex(next), 1.0, 0.0);
                 ui.painter()
-                    .rect_stroke(r, 0.0, Stroke::new(1.5, NEXT), egui::StrokeKind::Outside);
+                    .rect_stroke(r, 4.0, Stroke::new(1.0, LINE), egui::StrokeKind::Outside);
                 if next.is_none() {
                     ui.painter().text(
                         r.center(),
                         egui::Align2::CENTER_CENTER,
                         "Ende",
-                        egui::FontId::proportional(20.0),
+                        egui::FontId::proportional(18.0),
                         MUTED,
                     );
                 }
-                ui.add_space(8.0);
                 if let Some(n) = next {
-                    let trig = self
-                        .show
+                    ui.add_space(4.0);
+                    let title = self
                         .slides
                         .get(n)
-                        .map(|s| s.trigger)
+                        .map(|s| s.title.clone())
                         .unwrap_or_default();
-                    let t = match trig {
+                    if !title.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(title).strong()).truncate());
+                    }
+                    let cfg = self.show.slides.get(n);
+                    let t = match cfg.map(|c| c.trigger).unwrap_or_default() {
                         Trigger::Go => "kommt mit GO".to_string(),
-                        Trigger::Timecode => format!(
-                            "kommt bei TC {}",
-                            self.show.slides.get(n).map(|s| s.tc.as_str()).unwrap_or("")
-                        ),
+                        Trigger::Timecode => {
+                            format!("kommt bei TC {}", cfg.map(|s| s.tc.as_str()).unwrap_or(""))
+                        }
                     };
-                    ui.label(RichText::new(format!("Folie {} · {t}", n + 1)).color(MUTED));
-                }
-                // Time on the current slide.
-                if self.player.current.is_some() {
-                    let s = self.player.since.elapsed().as_secs();
-                    ui.label(
-                        RichText::new(format!("Auf dieser Folie seit {}:{:02}", s / 60, s % 60))
-                            .color(MUTED),
-                    );
+                    ui.label(RichText::new(t).small().color(MUTED));
                 }
             });
         });
-        ui.add_space(12.0);
-        // Buttons.
+        ui.add_space(14.0);
+        // Transport.
         ui.horizontal(|ui| {
-            let go_label = match next {
-                Some(n) => format!("GO  ·  Folie {}", n + 1),
-                None => "GO  (Ende)".into(),
+            let h = 54.0;
+            let (r, go) = ui.allocate_exact_size(
+                Vec2::new((live_w * 0.42).clamp(180.0, 320.0), h),
+                if next.is_some() {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                },
+            );
+            let fill = match (next.is_some(), go.hovered(), go.is_pointer_button_down_on()) {
+                (false, ..) => CARD,
+                (true, _, true) => Color32::from_rgb(22, 150, 70),
+                (true, true, _) => Color32::from_rgb(52, 214, 112),
+                _ => LIVE,
             };
-            let go = ui.add_enabled(
-                next.is_some(),
-                egui::Button::new(
-                    RichText::new(go_label)
-                        .size(22.0)
-                        .strong()
-                        .color(Color32::BLACK),
-                )
-                .fill(LIVE)
-                .min_size(Vec2::new(240.0, 56.0)),
+            let ink = if next.is_some() {
+                Color32::BLACK
+            } else {
+                MUTED
+            };
+            ui.painter().rect_filled(r, 8.0, fill);
+            ui.painter().text(
+                r.left_center() + Vec2::new(18.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "GO",
+                egui::FontId::proportional(26.0),
+                ink,
+            );
+            ui.painter().text(
+                r.right_center() - Vec2::new(16.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                match next {
+                    Some(n) => format!("Folie {}", n + 1),
+                    None => "Ende".into(),
+                },
+                egui::FontId::proportional(14.0),
+                ink,
             );
             if go
-                .on_hover_text("Leertaste, →, Bild ↓ oder Klicker")
+                .on_hover_text("Leertaste, Pfeil rechts, Bild ab oder Klicker")
                 .clicked()
             {
                 self.go();
             }
             if ui
-                .add(
-                    egui::Button::new(RichText::new("Zurück").size(16.0))
-                        .min_size(Vec2::new(110.0, 56.0)),
-                )
-                .on_hover_text("←, Bild ↑")
+                .add(tool_button("Zurück", None, h))
+                .on_hover_text("Pfeil links, Bild auf")
                 .clicked()
             {
                 self.back();
             }
             let bo = self.player.blackout;
-            let b = egui::Button::new(RichText::new("Blackout").size(16.0).color(if bo {
-                Color32::WHITE
-            } else {
-                TEXT
-            }))
-            .fill(if bo { DANGER } else { CARD })
-            .min_size(Vec2::new(120.0, 56.0));
-            if ui.add(b).on_hover_text("B oder . (Taste)").clicked() {
+            if ui
+                .add(tool_button("Blackout", bo.then_some(DANGER), h))
+                .on_hover_text("Taste B")
+                .clicked()
+            {
                 self.player.set_blackout(!bo);
             }
             if ui
-                .add(
-                    egui::Button::new(RichText::new("Leeren").size(16.0))
-                        .min_size(Vec2::new(100.0, 56.0)),
-                )
+                .add(tool_button("Leeren", None, h))
                 .on_hover_text("Zurück auf Schwarz vor der ersten Folie")
                 .clicked()
             {
                 self.goto(None);
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(14.0);
         // Speaker notes of the live slide.
+        let notes = self
+            .player
+            .current
+            .and_then(|c| self.slides.get(c))
+            .map(|s| s.notes.as_str())
+            .unwrap_or("");
         Frame::new()
             .fill(PANEL)
-            .stroke(Stroke::new(1.0, LINE))
             .corner_radius(CornerRadius::same(8))
-            .inner_margin(Margin::same(12))
+            .inner_margin(Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.set_min_height(ui.available_height().max(40.0) - 24.0);
-                ui.label(RichText::new("Notizen").small().color(MUTED));
-                let notes = self
-                    .player
-                    .current
-                    .and_then(|c| self.slides.get(c))
-                    .map(|s| s.notes.as_str())
-                    .unwrap_or("");
+                ui.set_min_height((ui.available_height() - 28.0).max(40.0));
+                ui.label(RichText::new("NOTIZEN").small().strong().color(MUTED));
+                ui.add_space(4.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.label(RichText::new(if notes.is_empty() { "—" } else { notes }).size(19.0));
+                    if notes.is_empty() {
+                        ui.label(RichText::new("Keine Notizen auf dieser Folie").color(MUTED));
+                    } else {
+                        ui.label(RichText::new(notes).size(19.0));
+                    }
                 });
             });
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
         let Some(i) = self.selected.filter(|i| *i < self.show.slides.len()) else {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(
-                    "Folie anklicken, um sie einzustellen.\nDoppelklick zeigt sie sofort.",
-                )
-                .color(MUTED),
-            );
             return;
         };
         let reading = self.tc.reading();
@@ -1042,84 +1160,122 @@ impl App {
             .get(i)
             .map(|s| s.title.clone())
             .unwrap_or_default();
-        ui.label(
-            RichText::new(format!("Folie {}", i + 1))
-                .size(17.0)
-                .strong(),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Folie {}", i + 1))
+                    .size(17.0)
+                    .strong(),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(flat_button("Schließen"))
+                    .on_hover_text("Esc")
+                    .clicked()
+                {
+                    self.selected = None;
+                }
+            });
+        });
         if !title.is_empty() {
-            ui.label(RichText::new(title).color(MUTED));
+            ui.add(egui::Label::new(RichText::new(title).color(MUTED)).truncate());
         }
+        ui.add_space(6.0);
         if let Some(t) = self.thumbs.get(&i) {
             let w = ui.available_width();
             let aspect = self.deck.as_ref().map(|d| d.aspect).unwrap_or(16.0 / 9.0);
-            ui.add(egui::Image::new(t).fit_to_exact_size(Vec2::new(w, w / aspect)));
+            ui.add(
+                egui::Image::new(t)
+                    .fit_to_exact_size(Vec2::new(w, w / aspect))
+                    .corner_radius(4),
+            );
         }
-        if ui.button("Jetzt zeigen").clicked() {
+        ui.add_space(6.0);
+        if ui
+            .add(tool_button("Jetzt zeigen", None, 32.0))
+            .on_hover_text("Auch: Doppelklick in der Liste")
+            .clicked()
+        {
             self.goto(Some(i));
         }
-        ui.separator();
         let cfg = &mut self.show.slides[i];
-        ui.label(RichText::new("Auslösen").strong());
-        ui.radio_value(
+        section(ui, "Auslösen");
+        segmented(
+            ui,
             &mut cfg.trigger,
-            Trigger::Go,
-            "Mit GO (Knopf, Klicker, OSC)",
+            &[(Trigger::Go, "GO"), (Trigger::Timecode, "Timecode")],
         );
-        ui.radio_value(&mut cfg.trigger, Trigger::Timecode, "Bei Timecode");
-        if cfg.trigger == Trigger::Timecode {
-            ui.horizontal(|ui| {
-                let fps = reading.map(|r| r.fps.round()).unwrap_or(30.0);
-                let ok = cfg.tc.is_empty() || show::parse_tc(&cfg.tc, fps).is_some();
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.tc)
-                        .hint_text("HH:MM:SS:FF")
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(120.0)
-                        .text_color(if ok { TEXT } else { DANGER }),
-                );
-                if let Some(r) = reading {
-                    if ui
-                        .button("Aktueller TC")
-                        .on_hover_text("Den gerade laufenden Timecode übernehmen")
-                        .clicked()
-                    {
-                        cfg.tc = show::format_tc(r.secs, r.fps);
-                    }
-                }
-            });
-            if self.show.timecode.source == TcSource::Off {
+        match cfg.trigger {
+            Trigger::Go => {
                 ui.label(
-                    RichText::new("Timecode-Eingang ist aus (Einstellungen).")
+                    RichText::new("Mit GO-Knopf, Taste, Klicker oder OSC.")
                         .small()
-                        .color(AMBER),
+                        .color(MUTED),
                 );
             }
+            Trigger::Timecode => {
+                ui.horizontal(|ui| {
+                    let fps = reading.map(|r| r.fps.round()).unwrap_or(30.0);
+                    let ok = cfg.tc.is_empty() || show::parse_tc(&cfg.tc, fps).is_some();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut cfg.tc)
+                            .hint_text("HH:MM:SS:FF")
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(118.0)
+                            .text_color(if ok { TEXT } else { DANGER }),
+                    );
+                    if let Some(r) = reading {
+                        if ui
+                            .button("Aktueller TC")
+                            .on_hover_text("Den gerade laufenden Timecode übernehmen")
+                            .clicked()
+                        {
+                            cfg.tc = show::format_tc(r.secs, r.fps);
+                        }
+                    }
+                });
+                if self.show.timecode.source == TcSource::Off {
+                    ui.label(
+                        RichText::new("Der Timecode-Eingang ist aus (Einstellungen › Timecode).")
+                            .small()
+                            .color(AMBER),
+                    );
+                }
+            }
         }
-        ui.separator();
-        ui.label(RichText::new("Übergang").strong());
-        let file_label = match file_t {
-            Transition::Cut => "Wie in der Datei (Schnitt)".to_string(),
-            Transition::Fade(s) => format!("Wie in der Datei (Blende {s:.1} s)"),
-        };
+        section(ui, "Übergang");
         let mut kind = match cfg.transition {
             TransitionCfg::FromFile => 0,
             TransitionCfg::Cut => 1,
             TransitionCfg::Fade(_) => 2,
         };
-        ui.radio_value(&mut kind, 0, file_label);
-        ui.radio_value(&mut kind, 1, "Schnitt");
-        ui.radio_value(&mut kind, 2, "Blende");
+        segmented(
+            ui,
+            &mut kind,
+            &[(0, "Wie Datei"), (1, "Schnitt"), (2, "Blende")],
+        );
         let mut secs = match cfg.transition {
             TransitionCfg::Fade(s) => s,
             _ => 0.7,
         };
-        if kind == 2 {
-            ui.add(
-                egui::Slider::new(&mut secs, 0.1..=5.0)
-                    .suffix(" s")
-                    .step_by(0.1),
-            );
+        match kind {
+            0 => {
+                ui.label(
+                    RichText::new(match file_t {
+                        Transition::Cut => "In der Datei: Schnitt".to_string(),
+                        Transition::Fade(s) => format!("In der Datei: Blende {s:.1} s"),
+                    })
+                    .small()
+                    .color(MUTED),
+                );
+            }
+            2 => {
+                ui.add(
+                    egui::Slider::new(&mut secs, 0.1..=5.0)
+                        .suffix(" s")
+                        .step_by(0.1),
+                );
+            }
+            _ => {}
         }
         cfg.transition = match kind {
             1 => TransitionCfg::Cut,
@@ -1132,8 +1288,7 @@ impl App {
             .map(|s| s.notes.clone())
             .unwrap_or_default();
         if !notes.is_empty() {
-            ui.separator();
-            ui.label(RichText::new("Notizen").strong());
+            section(ui, "Notizen");
             ui.label(RichText::new(notes).color(MUTED));
         }
     }
@@ -1143,18 +1298,55 @@ impl App {
         egui::Window::new("Einstellungen")
             .open(&mut open)
             .collapsible(false)
-            .resizable(true)
-            .default_width(480.0)
-            .default_height(640.0)
-            .default_pos(ctx.content_rect().center() - Vec2::new(240.0, 320.0))
+            .resizable(false)
+            .fixed_size([520.0, 460.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .frame(
+                Frame::window(&ctx.global_style())
+                    .fill(PANEL)
+                    .inner_margin(Margin::same(16)),
+            )
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.settings_ui(ui));
+                ui.horizontal(|ui| {
+                    for (t, label) in [
+                        (SettingsTab::Output, "Ausgang"),
+                        (SettingsTab::Timecode, "Timecode"),
+                        (SettingsTab::Network, "Netzwerk"),
+                        (SettingsTab::Program, "Programm"),
+                    ] {
+                        let on = self.settings_tab == t;
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(label).color(if on {
+                                    TEXT
+                                } else {
+                                    MUTED
+                                }))
+                                .fill(if on { CARD } else { Color32::TRANSPARENT })
+                                .stroke(Stroke::NONE),
+                            )
+                            .clicked()
+                        {
+                            self.settings_tab = t;
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.settings_tab {
+                        SettingsTab::Output => self.settings_output(ui),
+                        SettingsTab::Timecode => self.settings_timecode(ui),
+                        SettingsTab::Network => self.settings_network(ui),
+                        SettingsTab::Program => self.settings_program(ui),
+                    });
             });
         self.settings_open = open;
     }
 
-    fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Ausgang").size(16.0).strong());
+    fn settings_output(&mut self, ui: &mut egui::Ui) {
         let o = &mut self.show.output;
         let label = |d: Option<usize>, ds: &[Disp]| match d {
             None => "Aus".to_string(),
@@ -1172,11 +1364,11 @@ impl App {
         };
         egui::Grid::new("out")
             .num_columns(2)
-            .spacing([12.0, 8.0])
+            .spacing([14.0, 10.0])
             .show(ui, |ui| {
-                ui.label("Bildschirm");
+                ui.label(RichText::new("Bildschirm").color(MUTED));
                 egui::ComboBox::from_id_salt("display")
-                    .width(300.0)
+                    .width(320.0)
                     .selected_text(label(o.display, &self.displays))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut o.display, None, "Aus");
@@ -1189,8 +1381,9 @@ impl App {
                         }
                     });
                 ui.end_row();
-                ui.label("Auflösung");
+                ui.label(RichText::new("Auflösung").color(MUTED));
                 egui::ComboBox::from_id_salt("res")
+                    .width(320.0)
                     .selected_text(o.resolution.label())
                     .show_ui(ui, |ui| {
                         for r in Resolution::ALL {
@@ -1198,67 +1391,84 @@ impl App {
                         }
                     });
                 ui.end_row();
-                ui.label("NDI");
+                ui.label(RichText::new("NDI").color(MUTED));
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut o.ndi, "senden als");
                     ui.add_enabled(
                         o.ndi,
-                        egui::TextEdit::singleline(&mut o.ndi_name).desired_width(140.0),
+                        egui::TextEdit::singleline(&mut o.ndi_name)
+                            .hint_text("Lantern")
+                            .desired_width(160.0),
                     );
                 });
                 ui.end_row();
-                ui.label("Bilder/s (NDI)");
-                ui.horizontal(|ui| {
-                    for f in [25, 30, 50, 60] {
-                        ui.selectable_value(&mut o.fps, f, f.to_string());
-                    }
+                if o.ndi {
+                    ui.label(RichText::new("Bilder/s").color(MUTED));
+                    segmented(
+                        ui,
+                        &mut o.fps,
+                        &[(25, "25"), (30, "30"), (50, "50"), (60, "60")],
+                    );
+                    ui.end_row();
+                }
+            });
+        ui.add_space(6.0);
+        if self.show.output.ndi {
+            if let Some(e) = &self.ndi_error {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(e).color(DANGER));
+                    ui.hyperlink_to("NDI Tools laden", ndi::WEBSITE);
                 });
-                ui.end_row();
-            });
-        if let Some(e) = &self.ndi_error {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(e).color(DANGER));
-                ui.hyperlink_to("ndi.video", ndi::WEBSITE);
-            });
-        } else if self.ndi.is_some() {
-            let (w, h) = self.output_size();
-            ui.label(
-                RichText::new(format!(
-                    "NDI-Quelle „{}“ sendet {w}×{h}",
-                    self.show.output.ndi_name
-                ))
-                .color(LIVE),
-            );
+            } else if self.ndi.is_some() {
+                let (w, h) = self.output_size();
+                ui.label(
+                    RichText::new(format!("NDI-Quelle „{}“ sendet {w}×{h}", self.ndi_name()))
+                        .color(LIVE),
+                );
+            }
         }
+        ui.add_space(6.0);
         ui.label(
-            RichText::new("Der Ausgang zeigt nur die Folien – keine Symbole, kein Mauszeiger. Esc beendet ihn nicht; dafür hier „Aus“ wählen.")
+            RichText::new("Der Ausgang zeigt nur die Folien – keine Symbole, kein Mauszeiger.")
                 .small()
                 .color(MUTED),
         );
+    }
 
-        ui.separator();
-        ui.label(RichText::new("Timecode").size(16.0).strong());
+    fn settings_timecode(&mut self, ui: &mut egui::Ui) {
         let t = &mut self.show.timecode;
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut t.source, TcSource::Off, "Aus");
-            ui.selectable_value(&mut t.source, TcSource::Ltc, "LTC (Audio)");
-            ui.selectable_value(&mut t.source, TcSource::RtpMidi, "MIDI-Timecode (RTP-MIDI)");
-        });
+        segmented(
+            ui,
+            &mut t.source,
+            &[
+                (TcSource::Off, "Aus"),
+                (TcSource::Ltc, "LTC (Audio)"),
+                (TcSource::RtpMidi, "MIDI-Timecode (Netzwerk)"),
+            ],
+        );
+        ui.add_space(8.0);
         match t.source {
-            TcSource::Off => {}
+            TcSource::Off => {
+                ui.label(
+                    RichText::new(
+                        "Ohne Timecode laufen alle Folien mit GO. Folien mit Timecode-Auslöser warten.",
+                    )
+                    .color(MUTED),
+                );
+            }
             TcSource::Ltc => {
                 egui::Grid::new("ltc")
                     .num_columns(2)
-                    .spacing([12.0, 8.0])
+                    .spacing([14.0, 10.0])
                     .show(ui, |ui| {
-                        ui.label("Eingang");
+                        ui.label(RichText::new("Eingang").color(MUTED));
                         let shown = if t.ltc_device.is_empty() {
                             "Standard".to_string()
                         } else {
                             t.ltc_device.clone()
                         };
                         egui::ComboBox::from_id_salt("ltcdev")
-                            .width(280.0)
+                            .width(300.0)
                             .selected_text(shown)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut t.ltc_device, String::new(), "Standard");
@@ -1267,37 +1477,46 @@ impl App {
                                 }
                             });
                         ui.end_row();
-                        ui.label("Kanal");
+                        ui.label(RichText::new("Kanal").color(MUTED));
                         let mut ch = t.ltc_channel + 1;
                         ui.add(egui::DragValue::new(&mut ch).range(1..=64));
                         t.ltc_channel = ch - 1;
                         ui.end_row();
-                        ui.label("Pegel");
+                        ui.label(RichText::new("Pegel").color(MUTED));
                         let l = self.tc.level();
-                        ui.add(egui::ProgressBar::new(l.min(1.0)).desired_width(200.0));
+                        ui.add(egui::ProgressBar::new(l.min(1.0)).desired_width(220.0));
                         ui.end_row();
                     });
             }
             TcSource::RtpMidi => {
                 egui::Grid::new("rtp")
                     .num_columns(2)
-                    .spacing([12.0, 8.0])
+                    .spacing([14.0, 10.0])
                     .show(ui, |ui| {
-                        ui.label("Session-Name");
+                        ui.label(RichText::new("Session").color(MUTED));
                         ui.text_edit_singleline(&mut t.rtp_name);
                         ui.end_row();
-                        ui.label("Port");
+                        ui.label(RichText::new("Port").color(MUTED));
                         ui.add(egui::DragValue::new(&mut t.rtp_port).range(1024..=65000));
                         ui.end_row();
                     });
+                ui.add_space(6.0);
                 let peers = self.tc.connected();
                 if peers.is_empty() {
-                    ui.label(RichText::new("Noch niemand verbunden. In Show Master unter MIDI die Session „Lantern“ verbinden – oder hier:").color(MUTED));
+                    ui.label(
+                        RichText::new(format!(
+                            "Noch nicht verbunden. In Show Master unter MIDI die Session „{}“ verbinden – oder hier eine wählen:",
+                            t.rtp_name
+                        ))
+                        .color(MUTED),
+                    );
                 } else {
-                    ui.label(RichText::new(format!("Verbunden: {}", peers.join(", "))).color(LIVE));
+                    ui.label(
+                        RichText::new(format!("Verbunden mit {}", peers.join(", "))).color(LIVE),
+                    );
                 }
                 let mut connect: Option<String> = None;
-                for (name, addr) in self.tc.discovered() {
+                for (name, addr) in self.net.rtp_sessions() {
                     if name == t.rtp_name {
                         continue;
                     }
@@ -1316,12 +1535,39 @@ impl App {
                 }
             }
         }
-        ui.label(RichText::new(self.tc.status()).small().color(MUTED));
+        if self.show.timecode.source != TcSource::Off {
+            ui.add_space(8.0);
+            ui.label(RichText::new(self.tc.status()).small().color(MUTED));
+        }
+    }
 
-        ui.separator();
-        ui.label(RichText::new("Fernsteuerung (OSC)").size(16.0).strong());
+    fn settings_network(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Show Master").strong());
+        ui.label(
+            RichText::new(format!(
+                "Show Master findet diesen Rechner im Netz als „{}“: Lantern-Cue › Network.",
+                self.net.name()
+            ))
+            .color(MUTED),
+        );
+        if let Some(ip) = local_ip() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("IP-Adresse").color(MUTED));
+                ui.label(RichText::new(ip).monospace());
+            });
+        }
+        if let Some(p) = self.net.problem() {
+            ui.label(
+                RichText::new(format!(
+                    "Netzwerk-Suche gestört: {p} – dann die IP-Adresse eintragen."
+                ))
+                .small()
+                .color(AMBER),
+            );
+        }
+        section(ui, "Fernsteuerung (OSC)");
         ui.horizontal(|ui| {
-            ui.label("UDP-Port");
+            ui.label(RichText::new("UDP-Port").color(MUTED));
             ui.add(egui::DragValue::new(&mut self.show.osc_port).range(1024..=65000));
             match (&self.osc, &self.osc_error) {
                 (Some(_), _) => {
@@ -1333,22 +1579,38 @@ impl App {
                 _ => {}
             }
         });
-        ui.label(
-            RichText::new("/lantern/go · /lantern/back · /lantern/slide <n> · /lantern/first · /lantern/blackout [0|1] · /lantern/clear")
-                .small()
-                .monospace()
-                .color(MUTED),
-        );
+        ui.add_space(4.0);
+        egui::Grid::new("osc_cmds")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                for (a, what) in [
+                    ("/lantern/go", "nächste Folie"),
+                    ("/lantern/back", "vorige Folie"),
+                    ("/lantern/slide <n>", "Folie n zeigen"),
+                    ("/lantern/first", "erste Folie"),
+                    (
+                        "/lantern/blackout [0|1]",
+                        "Blackout (ohne Wert: umschalten)",
+                    ),
+                    ("/lantern/clear", "Schwarz vor der ersten Folie"),
+                ] {
+                    ui.label(RichText::new(a).small().monospace());
+                    ui.label(RichText::new(what).small().color(MUTED));
+                    ui.end_row();
+                }
+            });
+    }
 
-        ui.separator();
-        ui.label(RichText::new("LibreOffice").size(16.0).strong());
+    fn settings_program(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("LibreOffice").strong());
         match &self.office_found {
             Some(p) => {
                 ui.label(
-                    RichText::new(format!("Gefunden: {}", p.display()))
-                        .small()
+                    RichText::new("Installiert – PowerPoint-Dateien werden damit umgewandelt.")
                         .color(MUTED),
                 );
+                ui.label(RichText::new(p.display().to_string()).small().color(MUTED));
             }
             None => {
                 ui.label(
@@ -1359,107 +1621,224 @@ impl App {
                 );
             }
         }
+        section(ui, "Präsentation");
+        let ctx = ui.ctx().clone();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.deck.is_some(), egui::Button::new("Neu einlesen"))
+                .on_hover_text("Strg/⌘+R")
+                .clicked()
+            {
+                self.load(&ctx);
+            }
+            if let Some(f) = &self.show_file {
+                ui.label(
+                    RichText::new(format!(
+                        "Einstellungen gespeichert in {}",
+                        f.file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default()
+                    ))
+                    .small()
+                    .color(MUTED),
+                );
+            }
+        });
+        section(ui, "Tasten");
+        egui::Grid::new("keys")
+            .num_columns(2)
+            .spacing([16.0, 4.0])
+            .show(ui, |ui| {
+                for (k, what) in [
+                    ("Leertaste · → · Bild ab · Enter", "GO"),
+                    ("← · Bild auf · Rücktaste", "Zurück"),
+                    ("B", "Blackout"),
+                    ("Pos1", "Erste Folie"),
+                    ("Esc", "Folien-Einstellungen schließen"),
+                ] {
+                    ui.label(RichText::new(k).small());
+                    ui.label(RichText::new(what).small().color(MUTED));
+                    ui.end_row();
+                }
+            });
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(format!("Lantern {}", env!("CARGO_PKG_VERSION")))
+                .small()
+                .color(MUTED),
+        );
     }
 
-    /// Banner offering to install LibreOffice.
-    fn office_banner(&mut self, ui: &mut egui::Ui) {
-        if self.office_found.is_some() {
-            return;
-        }
-        let st = self.install.lock().map(|s| s.clone()).unwrap_or_default();
-        Frame::new()
-            .fill(Color32::from_rgb(48, 38, 14))
-            .stroke(Stroke::new(1.0, AMBER))
-            .corner_radius(CornerRadius::same(8))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("LibreOffice fehlt").strong().color(AMBER));
-                    ui.label("Lantern braucht es, um PowerPoint-Dateien originalgetreu zu öffnen.");
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if st.running {
-                            match st.progress {
-                                Some(p) => {
-                                    ui.add(
-                                        egui::ProgressBar::new(p)
-                                            .desired_width(140.0)
-                                            .show_percentage(),
-                                    );
-                                }
-                                None => {
-                                    ui.spinner();
-                                }
+    /// One line at the top of the centre: LibreOffice missing, file changed,
+    /// errors, loading.
+    fn banners(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        if self.office_found.is_none() {
+            let st = self.install.lock().map(|s| s.clone()).unwrap_or_default();
+            banner(ui, AMBER, |ui| {
+                ui.label(RichText::new("LibreOffice fehlt").strong().color(AMBER));
+                ui.label("– nötig, um PowerPoint-Dateien originalgetreu zu öffnen.");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if st.running {
+                        match st.progress {
+                            Some(p) => {
+                                ui.add(
+                                    egui::ProgressBar::new(p)
+                                        .desired_width(140.0)
+                                        .show_percentage(),
+                                );
                             }
-                            ui.label(RichText::new(&st.text).small());
-                        } else {
-                            if ui.link("Download-Seite").clicked() {
-                                office::open_url(office::DOWNLOAD_PAGE);
-                            }
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("Jetzt installieren")
-                                            .strong()
-                                            .color(Color32::BLACK),
-                                    )
-                                    .fill(AMBER),
-                                )
-                                .clicked()
-                            {
-                                office::install(self.install.clone());
-                            }
-                            if let Some(e) = &st.error {
-                                ui.label(RichText::new(e).small().color(DANGER));
-                            } else if !st.text.is_empty() {
-                                ui.label(RichText::new(&st.text).small());
+                            None => {
+                                ui.spinner();
                             }
                         }
-                    });
+                        ui.label(RichText::new(&st.text).small());
+                    } else {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Jetzt installieren")
+                                        .strong()
+                                        .color(Color32::BLACK),
+                                )
+                                .fill(AMBER),
+                            )
+                            .clicked()
+                        {
+                            office::install(self.install.clone());
+                        }
+                        if ui.link("Download-Seite").clicked() {
+                            office::open_url(office::DOWNLOAD_PAGE);
+                        }
+                        if let Some(e) = &st.error {
+                            ui.label(RichText::new(e).small().color(DANGER));
+                        } else if !st.text.is_empty() {
+                            ui.label(RichText::new(&st.text).small());
+                        }
+                    }
                 });
             });
-        ui.add_space(6.0);
+        }
+        if self.changed_on_disk && self.loading.is_none() {
+            banner(ui, TC, |ui| {
+                ui.label("Die Präsentation wurde geändert.");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Neu einlesen").clicked() {
+                        self.load(&ctx);
+                    }
+                });
+            });
+        }
+        if let Some(l) = &self.loading {
+            if self.deck.is_some() {
+                let s = l.status.lock().map(|s| s.clone()).unwrap_or_default();
+                banner(ui, MUTED, |ui| {
+                    ui.spinner();
+                    ui.label(s);
+                });
+            }
+        }
+        if let (Some(e), true) = (&self.load_error, self.deck.is_some()) {
+            let e = e.clone();
+            banner(ui, DANGER, |ui| {
+                ui.label(RichText::new(e).color(DANGER));
+            });
+        }
+    }
+
+    /// Short messages, bottom right, without moving anything.
+    fn toast(&self, ctx: &egui::Context) {
+        let Some((m, at)) = &self.message else { return };
+        let age = at.elapsed().as_secs_f32();
+        if age > 4.0 {
+            return;
+        }
+        let alpha = ((4.0 - age) / 0.5).clamp(0.0, 1.0);
+        egui::Area::new(egui::Id::unique("toast"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.set_opacity(alpha);
+                Frame::new()
+                    .fill(CARD)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.label(m);
+                    });
+            });
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
 
     fn welcome(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.25);
-            ui.label(RichText::new("Lantern").size(40.0).strong().color(AMBER));
+            ui.add_space(ui.available_height() * 0.28);
+            ui.label(RichText::new("Lantern").size(38.0).strong().color(AMBER));
             ui.label(
                 RichText::new("Präsentationen für die Bühne")
-                    .size(16.0)
+                    .size(15.0)
                     .color(MUTED),
             );
-            ui.add_space(24.0);
+            ui.add_space(26.0);
             if let Some(l) = &self.loading {
                 ui.spinner();
                 let s = l.status.lock().map(|s| s.clone()).unwrap_or_default();
-                ui.label(format!("{s}  ({} s)", l.started.elapsed().as_secs()));
+                ui.label(
+                    RichText::new(format!("{s}  ({} s)", l.started.elapsed().as_secs()))
+                        .color(MUTED),
+                );
                 return;
             }
             if let Some(e) = &self.load_error {
                 ui.label(RichText::new(e).color(DANGER));
-                ui.add_space(8.0);
+                ui.add_space(10.0);
             }
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new("Präsentation öffnen…")
-                            .size(18.0)
+                        RichText::new("Präsentation öffnen")
+                            .size(17.0)
                             .strong()
                             .color(Color32::BLACK),
                     )
                     .fill(AMBER)
-                    .min_size(Vec2::new(260.0, 48.0)),
+                    .corner_radius(8)
+                    .min_size(Vec2::new(240.0, 46.0)),
                 )
                 .clicked()
             {
                 self.pick_file(&ctx);
             }
-            ui.add_space(8.0);
-            ui.label(RichText::new("oder eine .pptx-Datei hierher ziehen").color(MUTED));
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("oder eine Datei hierher ziehen  ·  PowerPoint, Keynote, PDF")
+                    .color(MUTED),
+            );
         });
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsTab {
+    #[default]
+    Output,
+    Timecode,
+    Network,
+    Program,
+}
+
+/// The address other computers reach this one at (no packet is sent).
+fn local_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    let ip = s.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
+}
+
+fn full_uv() -> Rect {
+    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
 }
 
 /// Draw the output picture: previous slide, the current one faded over it, blackout on top.
@@ -1507,14 +1886,88 @@ fn paint_output(
     }
 }
 
-fn chip(ui: &mut egui::Ui, text: &str, color: Color32) {
+/// A coloured dot and a label (outputs in the top bar).
+fn status(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
+    let font = egui::FontId::proportional(13.0);
+    let g = ui.painter().layout_no_wrap(text.to_string(), font, TEXT);
+    let size = Vec2::new(g.size().x + 16.0, 22.0);
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    ui.painter()
+        .circle_filled(pos2(r.left() + 4.0, r.center().y), 3.5, color);
+    ui.painter().galley(
+        pos2(r.left() + 14.0, r.center().y - g.size().y / 2.0),
+        g,
+        TEXT,
+    );
+    resp
+}
+
+/// A quiet button for the top bar and panel headers.
+fn flat_button(text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).color(TEXT))
+        .fill(CARD)
+        .stroke(Stroke::NONE)
+        .corner_radius(6)
+}
+
+/// A large transport button; `on` paints it in that colour.
+fn tool_button(text: &str, on: Option<Color32>, h: f32) -> egui::Button<'static> {
+    egui::Button::new(
+        RichText::new(text.to_string())
+            .size(15.0)
+            .color(if on.is_some() { Color32::WHITE } else { TEXT }),
+    )
+    .fill(on.unwrap_or(CARD))
+    .stroke(Stroke::NONE)
+    .corner_radius(8)
+    .min_size(Vec2::new(104.0, h))
+}
+
+/// Side-by-side choices, one of them selected.
+fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)]) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (v, label) in options {
+            let on = *value == *v;
+            let b = egui::Button::new(RichText::new(*label).color(if on {
+                Color32::BLACK
+            } else {
+                TEXT
+            }))
+            .fill(if on { AMBER } else { CARD })
+            .stroke(Stroke::NONE)
+            .corner_radius(6);
+            if ui.add(b).clicked() {
+                *value = *v;
+            }
+        }
+    });
+}
+
+/// A small heading with some room above.
+fn section(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(14.0);
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .small()
+            .strong()
+            .color(MUTED),
+    );
+    ui.add_space(2.0);
+}
+
+/// A slim notice line with a coloured edge.
+fn banner(ui: &mut egui::Ui, color: Color32, add: impl FnOnce(&mut egui::Ui)) {
     Frame::new()
-        .stroke(Stroke::new(1.0, color))
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::symmetric(5, 1))
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.6)))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(12, 8))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).small().strong().color(color));
+            ui.set_width(ui.available_width());
+            ui.horizontal(add);
         });
+    ui.add_space(8.0);
 }
 
 fn clock() -> String {
@@ -1534,6 +1987,10 @@ fn style(ctx: &egui::Context) {
     let mut s = (*ctx.global_style()).clone();
     s.spacing.button_padding = Vec2::new(12.0, 6.0);
     s.spacing.item_spacing = Vec2::new(8.0, 6.0);
+    // Small print stays readable from a step away.
+    if let Some(f) = s.text_styles.get_mut(&egui::TextStyle::Small) {
+        f.size = 12.0;
+    }
     ctx.set_global_style(s);
 }
 
@@ -1600,64 +2057,54 @@ impl eframe::App for App {
         self.autosave();
         self.output_window(&ctx);
 
+        let osc_port = self.osc.as_ref().map(|l| l.port);
+        let rtp = self
+            .tc
+            .rtp_port()
+            .map(|p| (self.show.timecode.rtp_name.clone(), p));
+        self.net.update(osc_port, rtp);
+
         egui::Panel::top("top")
             .frame(
                 Frame::new()
                     .fill(PANEL)
-                    .inner_margin(Margin::symmetric(10, 8)),
+                    .inner_margin(Margin::symmetric(14, 8)),
             )
+            .exact_size(46.0)
             .show(ui, |ui| self.top_bar(ui));
         if self.deck.is_some() {
             egui::Panel::left("slides")
-                .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(8)))
-                .default_size(330.0)
-                .min_size(240.0)
+                .frame(
+                    Frame::new()
+                        .fill(PANEL)
+                        .inner_margin(Margin::symmetric(8, 10)),
+                )
+                .default_size(300.0)
+                .min_size(220.0)
                 .resizable(true)
                 .show(ui, |ui| self.slide_list(ui));
-            egui::Panel::right("inspector")
-                .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(12)))
-                .default_size(280.0)
-                .min_size(230.0)
-                .resizable(true)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
-                });
+            if self.selected.is_some() {
+                egui::Panel::right("inspector")
+                    .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
+                    .default_size(290.0)
+                    .min_size(250.0)
+                    .resizable(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+                    });
+            }
         }
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(BG).inner_margin(Margin::same(14)))
+            .frame(Frame::new().fill(BG).inner_margin(Margin::same(18)))
             .show(ui, |ui| {
-                self.office_banner(ui);
-                if self.changed_on_disk {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Die Präsentation wurde geändert.").color(AMBER));
-                        if ui.button("Neu laden").clicked() {
-                            self.load(&ctx);
-                        }
-                    });
-                }
-                if let Some(l) = &self.loading {
-                    if self.deck.is_some() {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            let s = l.status.lock().map(|s| s.clone()).unwrap_or_default();
-                            ui.label(s);
-                        });
-                    }
-                }
-                if let (Some(e), true) = (&self.load_error, self.deck.is_some()) {
-                    ui.label(RichText::new(e).color(DANGER));
-                }
-                if let Some((m, at)) = &self.message {
-                    if at.elapsed() < Duration::from_secs(4) {
-                        ui.label(RichText::new(m).color(MUTED));
-                    }
-                }
+                self.banners(ui);
                 if self.deck.is_some() {
                     self.center(ui);
                 } else {
                     self.welcome(ui);
                 }
             });
+        self.toast(&ctx);
         if self.settings_open {
             self.settings_window(&ctx);
         }
