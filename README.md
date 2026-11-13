@@ -30,7 +30,8 @@ Not yet: videos and animations inside slides (a slide shows its final state).
 
 ## Build and install
 
-Linux:
+Linux (no sudo: it goes into `~/.local/share/stagehand/apps`, the folder Stagehand installs all apps
+into; run it again to update, `./install.sh --uninstall` removes it):
 
 ```bash
 ./install.sh
