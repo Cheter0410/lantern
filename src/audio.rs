@@ -120,6 +120,12 @@ pub struct Mixer {
     tap: Mutex<Option<VecDeque<f32>>>,
     /// Peak since the last look, per side (f32 bits).
     peak: [AtomicU32; 2],
+    /// From handing samples to the device to hearing them (µs, as the
+    /// device says), and the last mix: when and how many frames. Together
+    /// they say how far the sound heard is behind the sound played.
+    latency_us: AtomicU32,
+    last_frames: AtomicU32,
+    last_at: Mutex<Option<Instant>>,
 }
 
 impl Mixer {
@@ -129,7 +135,30 @@ impl Mixer {
             voices: Mutex::new(Vec::new()),
             tap: Mutex::new(None),
             peak: [AtomicU32::new(0), AtomicU32::new(0)],
+            latency_us: AtomicU32::new(0),
+            last_frames: AtomicU32::new(0),
+            last_at: Mutex::new(None),
         }
+    }
+
+    fn set_latency(&self, d: Duration) {
+        let us = d.as_micros().min(2_000_000) as u32;
+        self.latency_us.store(us, Ordering::Relaxed);
+    }
+
+    /// Seconds the sound heard now is behind what the voices have played:
+    /// the device's latency plus the part of the last buffer not heard yet.
+    pub fn delay(&self) -> f64 {
+        let latency = f64::from(self.latency_us.load(Ordering::Relaxed)) / 1e6;
+        let buffer =
+            f64::from(self.last_frames.load(Ordering::Relaxed)) / f64::from(self.rate().max(1));
+        let since = self
+            .last_at
+            .lock()
+            .ok()
+            .and_then(|t| *t)
+            .map_or(0.0, |t| t.elapsed().as_secs_f64());
+        (latency + buffer - since).clamp(0.0, latency + buffer)
     }
 
     pub fn rate(&self) -> u32 {
@@ -169,6 +198,10 @@ impl Mixer {
 
     /// Mix `frames` stereo frames into `out` (resized to `frames * 2`).
     pub fn mix(&self, frames: usize, out: &mut Vec<f32>) {
+        self.last_frames.store(frames as u32, Ordering::Relaxed);
+        if let Ok(mut t) = self.last_at.lock() {
+            *t = Some(Instant::now());
+        }
         out.clear();
         out.resize(frames * 2, 0.0);
         if let Ok(mut vs) = self.voices.lock() {
@@ -453,24 +486,49 @@ impl Output {
         Ok(format!("{name} · {chans} · {rate} Hz"))
     }
 
-    /// A short 1 kHz tone on the chosen channels.
+    /// Two seconds of pink noise on the chosen channels (the same on both).
     pub fn test_tone(&self) {
         let rate = self.mixer.rate();
-        let v = Voice::new(0.25);
-        let n = rate as usize; // one second
-        let mut s = Vec::with_capacity(n * 2);
-        for i in 0..n {
-            let t = i as f32 / rate as f32;
-            // Short fades at both ends: no clicks.
-            let env = (t / 0.02).min((1.0 - t) / 0.02).clamp(0.0, 1.0);
-            let x = (t * 1000.0 * std::f32::consts::TAU).sin() * env;
-            s.push(x);
-            s.push(x);
-        }
-        v.push(&s);
+        let v = Voice::new(1.0);
+        v.push(&pink_noise(rate, 2.0));
         v.eof.store(true, Ordering::Relaxed);
         self.mixer.add(v);
     }
+}
+
+/// Pink noise (equal energy per octave), about -18 dBFS RMS, interleaved
+/// stereo with the same signal on both sides; short fades at the ends.
+pub fn pink_noise(rate: u32, secs: f32) -> Vec<f32> {
+    let n = (rate as f32 * secs) as usize;
+    let mut seed: u32 = 0x1234_5678;
+    let mut white = move || {
+        // xorshift: fast, the same every time.
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as f32 / u32::MAX as f32 * 2.0 - 1.0
+    };
+    // Paul Kellet's filter: white noise to pink within ±0.05 dB.
+    let mut b = [0.0f32; 7];
+    let mut out = Vec::with_capacity(n * 2);
+    let fade = (rate as f32 * 0.02).max(1.0);
+    for i in 0..n {
+        let w = white();
+        b[0] = 0.99886 * b[0] + w * 0.0555179;
+        b[1] = 0.99332 * b[1] + w * 0.0750759;
+        b[2] = 0.96900 * b[2] + w * 0.153_852;
+        b[3] = 0.86650 * b[3] + w * 0.3104856;
+        b[4] = 0.55000 * b[4] + w * 0.5329522;
+        b[5] = -0.7616 * b[5] - w * 0.0168980;
+        let pink = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + w * 0.5362;
+        b[6] = w * 0.115926;
+        let env = (i as f32 / fade).min((n - i) as f32 / fade).min(1.0);
+        // The filter's sum runs at about 1.8 RMS; 0.07 makes about -18 dBFS.
+        let x = pink * 0.07 * env;
+        out.push(x);
+        out.push(x);
+    }
+    out
 }
 
 #[derive(Clone, Copy)]
@@ -492,7 +550,11 @@ where
     let mut mix = Vec::new();
     dev.build_output_stream(
         sc,
-        move |out: &mut [T], _| {
+        move |out: &mut [T], info: &cpal::OutputCallbackInfo| {
+            let ts = info.timestamp();
+            if let Some(d) = ts.playback.duration_since(&ts.callback) {
+                mixer.set_latency(d);
+            }
             let frames = out.len() / route.channels.max(1);
             mixer.mix(frames, &mut mix);
             for (f, frame) in out.chunks_mut(route.channels).enumerate() {
@@ -539,6 +601,36 @@ mod tests {
         m.mix(1, &mut out);
         assert!(v.is_gone());
         assert!(m.voices.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pink_noise_is_pink_and_not_too_loud() {
+        let rate = 48_000;
+        let s = pink_noise(rate, 2.0);
+        assert_eq!(s.len(), 2 * 96_000);
+        let left: Vec<f32> = s.iter().step_by(2).copied().collect();
+        let rms = (left.iter().map(|x| x * x).sum::<f32>() / left.len() as f32).sqrt();
+        let db = 20.0 * rms.log10();
+        assert!((-22.0..-14.0).contains(&db), "{db} dBFS");
+        assert!(left.iter().all(|x| x.abs() < 1.0), "no clipping");
+        assert!(left[0].abs() < 1e-3, "fades in");
+        // Pink: a lot more energy low than high. Energy of the signal vs.
+        // its first difference (a high-pass) – white noise gives ~2x, pink far less.
+        let e = left.iter().map(|x| x * x).sum::<f32>();
+        let d = left.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>();
+        assert!(d / e < 0.5, "high share {}", d / e);
+    }
+
+    #[test]
+    fn delay_counts_down_within_a_buffer() {
+        let m = Mixer::new(1000);
+        m.set_latency(Duration::from_millis(20));
+        let mut out = Vec::new();
+        m.mix(10, &mut out); // 10 ms buffer
+        let d = m.delay();
+        assert!((0.025..=0.030).contains(&d), "{d}");
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(m.delay(), 0.0, "all heard by now");
     }
 
     #[test]

@@ -2,7 +2,12 @@
 //! one on the system). FFmpeg runs as its own program: one process decodes
 //! the picture (RGBA, at the size it has on the output, constant frame
 //! rate), one the sound (stereo float at the mixer's rate). The sound
-//! actually played is the clock; the picture follows it.
+//! actually heard is the clock (what the mixer played, less the device's
+//! latency); the picture follows it.
+//!
+//! After a start or a jump, sound and clock wait until the first picture is
+//! decoded too (the picture takes longer: it starts from a key frame), so
+//! both begin together. Pausing freezes the picture at once.
 
 use crate::audio::{Mixer, Voice};
 use crate::deck::Image;
@@ -148,6 +153,11 @@ pub struct Playing {
     /// Sound over (short track): the clock goes on from here by the wall
     /// (clock, wall seconds then).
     sound_end: Mutex<Option<(f64, f64)>>,
+    /// Waiting for the first picture and enough sound (since then).
+    preroll: Option<Instant>,
+    /// Paused: the clock stands here (the picture stops at once, the sound
+    /// fades out after it).
+    held: Option<f64>,
     /// To start again somewhere else.
     ffmpeg: PathBuf,
     clip: Clip,
@@ -275,11 +285,16 @@ impl Playing {
                     v2.eof.store(true, Ordering::Relaxed);
                 })
                 .map_err(|e| e.to_string())?;
+            // Held silent until the picture is there too (see `update`).
+            if picture {
+                v.set_paused(true, true);
+            }
             s.mixer.add(v.clone());
             Some(v)
         } else {
             None
         };
+        let preroll = (picture && voice.is_some()).then(Instant::now);
         Ok(Playing {
             children,
             frames,
@@ -294,6 +309,8 @@ impl Playing {
             paused_at: None,
             paused_for: Duration::ZERO,
             sound_end: Mutex::new(None),
+            preroll,
+            held: None,
             drained: false,
             duration: s.clip.probe.duration,
             looped: s.looped,
@@ -318,11 +335,18 @@ impl Playing {
     /// Seconds into the clip (counting on over loops): the sound played so
     /// far, else the wall clock.
     pub fn clock(&self) -> f64 {
+        if let Some(h) = self.held {
+            return h;
+        }
+        if self.preroll.is_some() {
+            return self.offset;
+        }
         let wall = self.wall();
         let Some(v) = &self.voice else {
             return self.offset + wall;
         };
-        let t = self.offset + v.played() as f64 / f64::from(self.rate.max(1));
+        let heard = v.played() as f64 / f64::from(self.rate.max(1)) - self.mixer.delay();
+        let t = self.offset + heard.max(0.0);
         if !v.is_gone() {
             return t;
         }
@@ -350,15 +374,56 @@ impl Playing {
     /// Stop where it is (the picture stays), or play on.
     pub fn set_paused(&mut self, paused: bool) {
         match (paused, self.paused_at) {
-            (true, None) => self.paused_at = Some(Instant::now()),
+            (true, None) => {
+                self.held = Some(self.clock());
+                self.paused_at = Some(Instant::now());
+            }
             (false, Some(at)) => {
                 self.paused_for += at.elapsed();
                 self.paused_at = None;
+                self.held = None;
             }
             _ => return,
         }
-        if let Some(v) = &self.voice {
+        // While waiting for the first picture the sound stays held anyway.
+        if let Some(v) = self.voice.as_ref().filter(|_| self.preroll.is_none()) {
             v.set_paused(paused, false);
+        }
+    }
+
+    /// Still waiting for the first picture after a start or jump.
+    #[cfg(test)]
+    pub fn prerolling(&self) -> bool {
+        self.preroll.is_some()
+    }
+
+    /// End the wait when the first picture and enough sound are there (or
+    /// after a while, so a broken stream can't hold the clock for ever).
+    fn check_preroll(&mut self) {
+        let Some(since) = self.preroll else { return };
+        if self.pending.is_none() {
+            match self.frames.try_recv() {
+                Ok(f) => self.pending = Some(f),
+                Err(TryRecvError::Disconnected) => self.drained = true,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        let picture = self.pending.is_some() || self.drained;
+        let sound = self.voice.as_ref().is_none_or(|v| {
+            // A fifth of a second of stereo samples, or all there is.
+            v.queued() >= self.rate as usize * 2 / 5 || v.eof.load(Ordering::Relaxed)
+        });
+        if !(picture && sound) && since.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        self.preroll = None;
+        // The clock starts now.
+        self.started = Instant::now();
+        self.paused_for = Duration::ZERO;
+        if self.paused_at.is_some() {
+            self.paused_at = Some(self.started);
+        } else if let Some(v) = &self.voice {
+            v.set_paused(false, true);
         }
     }
 
@@ -381,6 +446,7 @@ impl Playing {
         })?;
         if self.is_paused() {
             new.paused_at = Some(new.started);
+            new.held = Some(to);
             if let Some(v) = &new.voice {
                 v.set_paused(true, true);
             }
@@ -395,6 +461,7 @@ impl Playing {
 
     /// The frame for now; `true` when it changed.
     pub fn update(&mut self) -> bool {
+        self.check_preroll();
         let want = (self.clock() * self.fps).floor() as u64;
         let mut changed = false;
         loop {
@@ -600,6 +667,93 @@ mod tests {
         assert!((3.8..6.0).contains(&took), "played in {took} s");
         assert!(frames > 80, "{frames} frames shown");
         assert_eq!(pl.frame().unwrap().w, 64);
+        let _ = std::fs::remove_file(&clip.file);
+    }
+
+    /// After a jump sound and picture start together: the clock stands
+    /// until the first picture is there, then the picture keeps up with the
+    /// sound. Pausing stops the picture at once.
+    #[test]
+    fn jumps_and_pauses_keep_picture_and_sound_together() {
+        let Some(ff) = ffmpeg() else { return };
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/video.pptx");
+        let file = std::env::temp_dir().join(format!("lantern-sync-{}.mp4", std::process::id()));
+        crate::pptx::extract(&p, "ppt/media/media1.mp4", &file).unwrap();
+        let clip = Clip {
+            probe: probe(&ff, &file).unwrap(),
+            file,
+        };
+        let mut out = crate::audio::Output::default();
+        out.apply(&crate::show::AudioCfg {
+            enabled: false,
+            ..Default::default()
+        });
+        let fps = 25.0;
+        let mut pl = Playing::start(Start {
+            ffmpeg: &ff,
+            clip: &clip,
+            w: 1920,
+            h: 1080,
+            fps: 25,
+            looped: false,
+            mixer: &out.mixer,
+            gain: 1.0,
+            from: 0.0,
+            picture: true,
+        })
+        .unwrap();
+        // Picture behind the clock (frames), worst seen.
+        let lag = |pl: &Playing| pl.clock() * fps - pl.next_index as f64;
+        let play = |pl: &mut Playing, ms: u64| -> f64 {
+            let mut worst: f64 = 0.0;
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(ms) {
+                pl.update();
+                if !pl.prerolling() {
+                    worst = worst.max(lag(pl));
+                }
+                std::thread::sleep(Duration::from_millis(4));
+            }
+            worst
+        };
+        // Under load FFmpeg may take a while to start: wait for the picture.
+        let started = |pl: &mut Playing| {
+            let t0 = Instant::now();
+            while pl.prerolling() {
+                assert!(t0.elapsed() < Duration::from_secs(5), "never started");
+                assert_eq!(pl.clock(), pl.offset, "the clock stands until then");
+                pl.update();
+                std::thread::sleep(Duration::from_millis(4));
+            }
+        };
+        assert!(
+            pl.prerolling() && pl.clock() == 0.0,
+            "waits for the picture"
+        );
+        started(&mut pl);
+        play(&mut pl, 300);
+        for to in [2.5, 0.5, 3.0, 1.0] {
+            pl.seek(to).unwrap();
+            assert_eq!(pl.clock(), to, "the clock stands at the jump");
+            started(&mut pl);
+            let worst = play(&mut pl, 400);
+            assert!(
+                worst < 2.5,
+                "picture {worst:.1} frames behind the sound after the jump to {to}"
+            );
+            assert!(pl.position() > to + 0.1, "plays on from {to}");
+        }
+
+        // Pause: the picture stops right there, not a bit later.
+        pl.seek(0.5).unwrap();
+        started(&mut pl);
+        play(&mut pl, 300);
+        pl.set_paused(true);
+        let at = pl.clock();
+        let frame = pl.next_index;
+        play(&mut pl, 300);
+        assert_eq!(pl.clock(), at, "the clock stands at once");
+        assert!(pl.next_index <= frame + 1, "no frames after the pause");
         let _ = std::fs::remove_file(&clip.file);
     }
 

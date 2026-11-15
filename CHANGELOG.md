@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+- Video and sound stay together after a jump (timeline, ±10 s, back to the start): sound and clock
+  now wait until the first picture at the new place is decoded – the picture starts from a key
+  frame and took longer, so it lagged behind the sound. The same at the start of a video.
+- Pause stops the picture at once. The picture followed the sound handed to the audio device,
+  which is heard only after the device's latency, so it ran ahead and on for a moment after the
+  sound had stopped; it now follows the sound actually heard (the device's latency is measured).
+- Test tone (Settings › Audio, setup wizard): two seconds of pink noise at about -18 dBFS instead
+  of a 1 kHz sine.
+
 ## 0.4.0
 
 - Start screen: Lantern opens on a banner with *New show*, *Open show*, *Migrate older show* and the

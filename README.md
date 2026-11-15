@@ -57,7 +57,7 @@ Lantern plays videos with FFmpeg, which the packages bring along (see `packaging
 when built from source it uses an installed `ffmpeg` (e.g. `brew install ffmpeg`).
 
 **Sound (Settings › Audio):** output device, stereo or mono and on which channels (e.g. 3–4 of an
-8-channel interface), sample rate (44.1 to 96 kHz or the device's own), fade length, a test tone and
+8-channel interface), sample rate (44.1 to 96 kHz or the device's own), fade length, a test tone (pink noise) and
 a level meter. With NDI on, the sound goes along with the picture too.
 
 Not yet: animations inside slides (a slide shows its final state).

@@ -748,7 +748,7 @@ impl App {
         ui.horizontal(|ui| {
             if ui
                 .button("Test tone")
-                .on_hover_text("One second of 1 kHz on the chosen channels")
+                .on_hover_text("Two seconds of pink noise on the chosen channels")
                 .clicked()
             {
                 self.audio.test_tone();
