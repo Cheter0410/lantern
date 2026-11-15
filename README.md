@@ -19,6 +19,10 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Test picture:** Settings › Output switches the outputs to a moving test picture in their own
   resolution (geometry, cropping, levels, sharpness, frame counter, clock, timecode, dropped frames
   and delay, smooth motion for judder and tearing); the top bar shows it is on air and turns it off.
+- **Output health:** a badge in the top bar when something is wrong – display not connected or
+  covering the Lantern window, no output, NDI not sending or without a receiver, timecode missing or
+  stopped, sound device gone – with what to do and a way to the settings. A sound device that is
+  unplugged is opened again by itself when it is back; videos play on meanwhile.
 - **Frame rate:** by default the highest the display supports (Settings › Output › Frame rate), or a
   fixed rate.
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,

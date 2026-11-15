@@ -336,6 +336,13 @@ pub struct Output {
     /// What is open, or what went wrong.
     pub status: String,
     pub ok: bool,
+    /// The device went away while playing (unplugged, switched off); it is
+    /// opened again by itself when it comes back.
+    pub disconnected: bool,
+    /// Set by the device's error callback.
+    failed: Arc<AtomicBool>,
+    opened: Instant,
+    watched: Instant,
 }
 
 impl Default for Output {
@@ -347,6 +354,10 @@ impl Default for Output {
             ticker: None,
             status: "Off".into(),
             ok: false,
+            disconnected: false,
+            failed: Arc::new(AtomicBool::new(false)),
+            opened: Instant::now(),
+            watched: Instant::now(),
         }
     }
 }
@@ -366,6 +377,9 @@ impl Output {
         self.cfg = Some(cfg.clone());
         self.stream = None;
         self.stop_ticker();
+        self.disconnected = false;
+        self.failed.store(false, Ordering::Relaxed);
+        self.opened = Instant::now();
         let r = if cfg.enabled {
             self.open(cfg)
         } else {
@@ -386,6 +400,49 @@ impl Output {
                 };
                 self.mixer.rate.store(rate, Ordering::Relaxed);
                 self.start_ticker();
+            }
+        }
+    }
+
+    /// Call often: notices a device that went away (its error callback, or
+    /// no more calls for sound), keeps the videos' clock going without it,
+    /// and opens it again when it is back.
+    pub fn watch(&mut self) {
+        if self.watched.elapsed() < Duration::from_millis(500) {
+            return;
+        }
+        self.watched = Instant::now();
+        let Some(cfg) = self.cfg.clone() else { return };
+        if self.stream.is_some() {
+            let stalled = self.opened.elapsed() > Duration::from_secs(2)
+                && self
+                    .mixer
+                    .last_at
+                    .lock()
+                    .ok()
+                    .and_then(|t| *t)
+                    .is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
+            if self.failed.load(Ordering::Relaxed) || stalled {
+                self.stream = None;
+                self.ok = false;
+                self.disconnected = true;
+                let name = if cfg.device.is_empty() {
+                    "The audio device".to_string()
+                } else {
+                    format!("\"{}\"", cfg.device)
+                };
+                self.status = format!("{name} is gone – videos play on without sound here");
+                // The videos' clock runs on without the device.
+                self.start_ticker();
+            }
+        } else if self.disconnected
+            && self.watched.duration_since(self.opened) > Duration::from_secs(2)
+            && find_device(&cfg.device).is_some()
+        {
+            self.reopen();
+            // Not yet usable: keep trying.
+            if !self.ok {
+                self.disconnected = true;
             }
         }
     }
@@ -468,11 +525,12 @@ impl Output {
             mono: cfg.mono,
         };
         let sc: cpal::StreamConfig = config.clone().into();
+        let f = self.failed.clone();
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => build::<f32>(&dev, &sc, self.mixer.clone(), route),
-            cpal::SampleFormat::I16 => build::<i16>(&dev, &sc, self.mixer.clone(), route),
-            cpal::SampleFormat::I32 => build::<i32>(&dev, &sc, self.mixer.clone(), route),
-            cpal::SampleFormat::U16 => build::<u16>(&dev, &sc, self.mixer.clone(), route),
+            cpal::SampleFormat::F32 => build::<f32>(&dev, &sc, self.mixer.clone(), route, f),
+            cpal::SampleFormat::I16 => build::<i16>(&dev, &sc, self.mixer.clone(), route, f),
+            cpal::SampleFormat::I32 => build::<i32>(&dev, &sc, self.mixer.clone(), route, f),
+            cpal::SampleFormat::U16 => build::<u16>(&dev, &sc, self.mixer.clone(), route, f),
             f => return Err(format!("{name}: sample format {f} is not supported")),
         }
         .map_err(|e| format!("{name}: {e}"))?;
@@ -543,6 +601,7 @@ fn build<T>(
     sc: &cpal::StreamConfig,
     mixer: Arc<Mixer>,
     route: Route,
+    failed: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
@@ -570,7 +629,12 @@ where
                 }
             }
         },
-        |e| eprintln!("audio out: {e}"),
+        move |e| {
+            eprintln!("audio out: {e}");
+            if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                failed.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )
 }

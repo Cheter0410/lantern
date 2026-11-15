@@ -190,6 +190,7 @@ impl App {
     /// Every frame: follow the slide on the output, play, fade, end.
     pub(super) fn update_video(&mut self, ctx: &egui::Context) {
         self.audio.apply(&self.show.audio);
+        self.audio.watch();
         self.audio.mixer.set_tap(self.ndi.is_some());
         let fade = self.show.audio.fade.max(0.0);
         self.fading.retain(|p| !p.silent());

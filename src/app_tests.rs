@@ -141,7 +141,7 @@ fn live_mode_locks_the_show() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
     // Keep the app's own settings (last file, mode) away from the real ones.
-    std::env::set_var("LANTERN_CONFIG_DIR", dir.join("config"));
+    super::set_test_config(dir.join("config"));
     let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
     if let Some(d) = &shots.0 {
         let _ = std::fs::create_dir_all(d);
@@ -266,7 +266,7 @@ fn plays_the_video_of_a_pptx() {
     let dir = std::env::temp_dir().join(format!("lantern-video-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    std::env::set_var("LANTERN_CONFIG_DIR", dir.join("config"));
+    super::set_test_config(dir.join("config"));
     let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
     if let Some(d) = &shots.0 {
         let _ = std::fs::create_dir_all(d);
@@ -447,7 +447,7 @@ fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lantern-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    std::env::set_var("LANTERN_CONFIG_DIR", dir.join("config"));
+    super::set_test_config(dir.join("config"));
     dir
 }
 
@@ -644,5 +644,82 @@ fn transport_fits_small_windows() {
         }
         assert!(r[3].right() <= w, "{name}: Reset inside the window");
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Problems with the outputs show in the top bar, with a list and the way
+/// to the settings that fix them; they go when the problem goes.
+#[test]
+fn output_problems_show_in_the_top_bar() {
+    use crate::show::{TcSource, Trigger};
+    let dir = temp_dir("health");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let mut h = harness(&dir);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    let wait = |h: &mut Harness<'_, App>| {
+        // The look comes every half second.
+        std::thread::sleep(Duration::from_millis(550));
+        h.run_steps(3);
+    };
+
+    // A display that is not there (the test has none).
+    h.state_mut().show.output.display = Some(1);
+    wait(&mut h);
+    assert!(
+        h.query_by_label("Health: Display 2 is not connected")
+            .is_some(),
+        "the badge names the problem"
+    );
+    shots.take(&mut h, "h1-display-missing");
+
+    // And slides on timecode that never comes: two problems.
+    {
+        let a = h.state_mut();
+        a.show.timecode.source = TcSource::RtpMidi;
+        a.show.timecode.rtp_port = 0;
+        if let Some(s) = a.show.slides.get_mut(1) {
+            s.trigger = Trigger::Timecode;
+        }
+    }
+    wait(&mut h);
+    assert!(h.query_by_label("Health: 2 problems").is_some());
+    h.get_by_label("Health: 2 problems").click();
+    h.run_steps(3);
+    assert!(h.state().health.open);
+    assert!(h.query_by_label("No timecode yet").is_some());
+    shots.take(&mut h, "h2-list");
+    h.get_by_label("Timecode settings").click();
+    h.run_steps(3);
+    assert!(h.state().settings_open && !h.state().health.open);
+    assert!(h.state().settings_tab == super::SettingsTab::Timecode);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+
+    // Fixed: the badge goes.
+    {
+        let a = h.state_mut();
+        a.settings_open = false;
+        a.show.timecode.source = TcSource::Off;
+        a.show.output.display = None;
+        a.show.output.ndi = true;
+        a.show.output.ndi_name = "Health test".into();
+    }
+    wait(&mut h);
+    let titles: Vec<String> = h
+        .state()
+        .health
+        .monitor
+        .issues
+        .iter()
+        .map(|i| i.title.clone())
+        .collect();
+    assert!(
+        !titles
+            .iter()
+            .any(|t| t.contains("Display") || t.contains("timecode")),
+        "{titles:?}"
+    );
+    shots.take(&mut h, "h3-fixed");
     let _ = std::fs::remove_dir_all(dir);
 }

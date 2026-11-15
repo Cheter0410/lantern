@@ -9,9 +9,9 @@ use crate::deck::Image;
 use libloading::Library;
 use std::ffi::{c_char, c_void, CString};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const WEBSITE: &str = "https://ndi.video/tools/";
 
@@ -64,6 +64,8 @@ struct Api {
     send_video: unsafe extern "C" fn(Handle, *const VideoFrame),
     send_audio: unsafe extern "C" fn(Handle, *const AudioFrame),
     send_destroy: unsafe extern "C" fn(Handle),
+    /// Receivers connected (older runtimes may not have it).
+    send_connections: Option<unsafe extern "C" fn(Handle, u32) -> i32>,
 }
 
 // The library's functions may be called from any thread.
@@ -151,6 +153,10 @@ fn load() -> Result<Api, String> {
                 send_video: sym!(b"NDIlib_send_send_video_v2\0"),
                 send_audio: sym!(b"NDIlib_send_send_audio_v2\0"),
                 send_destroy: sym!(b"NDIlib_send_destroy\0"),
+                send_connections: lib
+                    .get(b"NDIlib_send_get_no_connections\0")
+                    .ok()
+                    .map(|s| *s),
                 _lib: lib,
             });
         }
@@ -232,6 +238,8 @@ pub fn compose(
 pub struct Sender {
     scene: Arc<Mutex<Option<Scene>>>,
     stop: Arc<AtomicBool>,
+    /// Receivers watching (-1: not known yet or the runtime can't say).
+    receivers: Arc<AtomicI32>,
     pub name: String,
     pub size: (u32, u32),
     pub fps: u32,
@@ -262,6 +270,8 @@ impl Sender {
         let scene: Arc<Mutex<Option<Scene>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
         let (scene2, stop2) = (scene.clone(), stop.clone());
+        let receivers = Arc::new(AtomicI32::new(-1));
+        let receivers2 = receivers.clone();
         let cname = CString::new(name).map_err(|_| "Invalid NDI name")?;
         let fps = fps.clamp(1, 120);
         std::thread::Builder::new()
@@ -282,7 +292,16 @@ impl Sender {
                 let mut planar: Vec<f32> = Vec::new();
                 let mut pattern = crate::testpattern::Pattern::default();
                 let mut test_frame: u64 = 0;
+                let mut counted = Instant::now() - Duration::from_secs(10);
                 while !stop2.load(Ordering::Relaxed) {
+                    if let Some(f) = api
+                        .send_connections
+                        .filter(|_| counted.elapsed().as_secs() >= 1)
+                    {
+                        counted = Instant::now();
+                        // SAFETY: `snd` is alive; timeout 0 does not wait.
+                        receivers2.store(unsafe { f(snd, 0) }, Ordering::Relaxed);
+                    }
                     let s = scene2.lock().ok().and_then(|s| s.clone());
                     let with = |pic: &Option<Image>, v: &Option<(Image, (u32, u32))>| match (pic, v)
                     {
@@ -362,10 +381,16 @@ impl Sender {
         Ok(Sender {
             scene,
             stop,
+            receivers,
             name: name.to_string(),
             size: (w, h),
             fps,
         })
+    }
+
+    /// Receivers watching, when the runtime says.
+    pub fn receivers(&self) -> Option<u32> {
+        u32::try_from(self.receivers.load(Ordering::Relaxed)).ok()
     }
 
     pub fn set(&self, s: Scene) {

@@ -7,6 +7,7 @@
 mod app;
 mod audio;
 mod deck;
+mod health;
 mod media;
 mod ndi;
 mod net;

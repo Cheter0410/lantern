@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- Output health: Lantern looks at its outputs and inputs twice a second and shows problems as a badge
+  in the top bar – red when something does not go out or come in, amber when it is worth a look. A
+  new problem is announced and the badge pulses for a few seconds; a click lists every problem with
+  what to do, how long it has been there and a button to the settings that fix it. It goes away by
+  itself when the problem is gone. Checked:
+  - the output display is not connected, or it is the display the Lantern window is on;
+  - no output at all (no display, no NDI);
+  - NDI does not send, or nobody on the network receives it (receivers are counted);
+  - timecode never came although slides wait for it, or it stopped (for more than 2 s);
+  - the sound device is gone or does not open.
+- A sound device that goes away while playing (unplugged, switched off) is noticed: videos play on
+  without sound here instead of freezing, and the device is opened again by itself when it is back.
+- The NDI status in the top bar says how many receivers watch.
+
 ## 0.5.0
 
 - GO−, GO+, Blackout and Reset keep their places in small windows: the row works out its sizes from

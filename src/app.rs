@@ -57,8 +57,27 @@ struct Settings {
     live: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Each test (on its own thread) keeps its settings in its own folder,
+    /// away from the real ones and from the other tests.
+    static TEST_CONFIG: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn set_test_config(dir: PathBuf) {
+    TEST_CONFIG.with(|c| *c.borrow_mut() = Some(dir));
+}
+
 fn settings_file() -> Option<PathBuf> {
-    // Tests keep their settings away from the real ones.
+    #[cfg(test)]
+    {
+        let d = TEST_CONFIG.with(|c| c.borrow().clone()).unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("lantern-test-config-{}", std::process::id()))
+        });
+        return Some(d.join("settings.json"));
+    }
+    #[allow(unreachable_code)]
     if let Some(d) = std::env::var_os("LANTERN_CONFIG_DIR") {
         return Some(PathBuf::from(d).join("settings.json"));
     }
@@ -170,6 +189,8 @@ pub struct App {
     /// Start screen, setup wizard or the main window.
     screen: start::Screen,
     start: start::StartState,
+    /// Output health: problems with the outputs and inputs.
+    health: health::HealthUi,
 }
 
 impl App {
@@ -227,6 +248,7 @@ impl App {
             meter: [0.0; 2],
             screen: start::Screen::Start,
             start: start::StartState::default(),
+            health: health::HealthUi::default(),
         };
         // A file given to open: straight to it. Otherwise the start screen.
         if let Some(p) = open {
@@ -927,28 +949,28 @@ impl App {
                 if self.show.output.ndi {
                     let ok = self.ndi.is_some();
                     status(ui, "NDI", if ok { OK } else { DANGER }).on_hover_text(
-                        self.ndi_error
-                            .clone()
-                            .unwrap_or_else(|| format!("Sending as \"{}\"", self.ndi_name())),
+                        self.ndi_error.clone().unwrap_or_else(|| {
+                            let who = match self.ndi.as_ref().and_then(|n| n.receivers()) {
+                                Some(1) => " · 1 receiver".to_string(),
+                                Some(n) => format!(" · {n} receivers"),
+                                None => String::new(),
+                            };
+                            format!("Sending as \"{}\"{who}", self.ndi_name())
+                        }),
                     );
                 }
-                match self.show.output.display {
-                    Some(d) if d < self.displays.len() => {
-                        status(ui, &format!("Display {}", d + 1), OK);
-                    }
-                    Some(d) => {
-                        status(ui, &format!("Display {} missing", d + 1), DANGER);
-                    }
-                    None if !self.show.output.ndi => {
-                        let r = status(ui, "No output", MUTED)
-                            .on_hover_text("Click: choose a display or NDI as output");
-                        if r.clicked() {
-                            self.settings_open = true;
-                            self.settings_tab = SettingsTab::Output;
-                        }
-                    }
-                    None => {}
+                if let Some(d) = self
+                    .show
+                    .output
+                    .display
+                    .filter(|d| *d < self.displays.len())
+                {
+                    status(ui, &format!("Display {}", d + 1), OK);
                 }
+                // Problems (display gone, no NDI receiver, timecode
+                // stopped, sound device gone): a badge with the list.
+                ui.add_space(6.0);
+                self.health_badge(ui);
                 if self.show.timecode.source != TcSource::Off && !self.live() {
                     let (text, color) = match self.tc.reading() {
                         None => ("--:--:--:--".to_string(), MUTED),
@@ -2882,6 +2904,9 @@ impl eframe::App for App {
         self.receive_pictures(&ctx);
         self.want_pictures();
         self.update_ndi();
+        if self.screen == start::Screen::Main {
+            self.update_health();
+        }
         self.autosave();
         self.output_window(&ctx);
 
@@ -2976,6 +3001,8 @@ impl App {
     }
 }
 
+#[path = "app_health.rs"]
+mod health;
 #[path = "app_start.rs"]
 mod start;
 #[path = "app_testpic.rs"]
