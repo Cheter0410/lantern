@@ -294,7 +294,7 @@ impl Sender {
                             test: Some((info, tc)),
                             ..
                         }) if info.w == w && info.h == h => {
-                            let img = pattern.render(
+                            pattern.draw(
                                 &info,
                                 &crate::testpattern::Live {
                                     frame: test_frame,
@@ -304,7 +304,7 @@ impl Sender {
                             );
                             test_frame += 1;
                             buf.clear();
-                            buf.extend_from_slice(&img.rgba);
+                            buf.extend_from_slice(pattern.pixels());
                         }
                         Some(s) => compose(
                             with(&s.previous, &s.previous_video).as_ref(),

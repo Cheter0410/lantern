@@ -397,6 +397,14 @@ fn plays_the_video_of_a_pptx() {
     // Settings › Output: the test picture, on the display and the preview.
     h.get_by_label("Output").click();
     h.run_steps(3);
+    // Frame rate: by default the highest the display can (no display: 60).
+    assert!(h.state().show.output.fps_auto);
+    assert_eq!(h.state().output_fps(), 60);
+    shots.take(&mut h, "9b-settings-output");
+    h.state_mut().show.output.fps_auto = false;
+    h.state_mut().show.output.fps = 25;
+    assert_eq!(h.state().output_fps(), 25);
+    h.state_mut().show.output.fps_auto = true;
     h.get_by_label("Test picture on the outputs").click();
     run_until(&mut h, "the test picture", |a| a.test.tex.is_some());
     h.key_press(Key::Escape);

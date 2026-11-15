@@ -3,7 +3,7 @@
 //! show it drawn here; the NDI sender draws its own (own frame counter).
 
 use super::*;
-use crate::testpattern::{time_of_day, Info, Live, Pattern};
+use crate::testpattern::{time_of_day, Changed, Info, Live, Pattern};
 
 #[derive(Default)]
 pub(super) struct TestPicture {
@@ -37,7 +37,7 @@ impl App {
             output,
             w,
             h,
-            fps: o.fps.max(1),
+            fps: self.output_fps(),
             show: self.show_name(),
         }
     }
@@ -53,7 +53,7 @@ impl App {
                 output: format!("NDI · {}", self.ndi_name()),
                 w,
                 h,
-                fps: self.show.output.fps.max(1),
+                fps: self.ndi_fps(),
                 show: self.show_name(),
             },
             self.timecode_text(),
@@ -85,7 +85,7 @@ impl App {
             self.test.next_at = None;
             return;
         }
-        let fps = self.show.output.fps.max(1);
+        let fps = self.output_fps();
         let step = Duration::from_secs_f64(1.0 / f64::from(fps));
         let now = Instant::now();
         let due = self.test.next_at.is_none_or(|t| now >= t);
@@ -96,16 +96,38 @@ impl App {
                 time_of_day: time_of_day(),
                 timecode: self.timecode_text(),
             };
-            let img = self.test.pattern.render(&info, &live);
-            let ci = egui::ColorImage::from_rgba_unmultiplied(
-                [img.w as usize, img.h as usize],
-                &img.rgba,
-            );
-            match self.test.tex.as_mut() {
-                Some(t) => t.set(ci, egui::TextureOptions::LINEAR),
-                None => {
-                    self.test.tex =
-                        Some(ctx.load_texture("test-picture", ci, egui::TextureOptions::LINEAR));
+            let changed = self.test.pattern.draw(&info, &live);
+            let size = [info.w as usize, info.h as usize];
+            match (self.test.tex.as_mut(), changed) {
+                (Some(t), Changed::Areas(areas)) if t.size() == size => {
+                    // Only the parts that moved go to the graphics card.
+                    for a in areas {
+                        if let Some((a, px)) = self.test.pattern.area(a) {
+                            let img = egui::ColorImage::from_rgba_premultiplied(
+                                [a[2] as usize, a[3] as usize],
+                                &px,
+                            );
+                            t.set_partial(
+                                [a[0] as usize, a[1] as usize],
+                                img,
+                                egui::TextureOptions::LINEAR,
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    let img =
+                        egui::ColorImage::from_rgba_premultiplied(size, self.test.pattern.pixels());
+                    match self.test.tex.as_mut() {
+                        Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                        None => {
+                            self.test.tex = Some(ctx.load_texture(
+                                "test-picture",
+                                img,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        }
+                    }
                 }
             }
             self.test.frame += 1;

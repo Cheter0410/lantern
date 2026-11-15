@@ -304,7 +304,7 @@ impl App {
                 clip,
                 w: size.0,
                 h: size.1,
-                fps: self.show.output.fps.max(25),
+                fps: self.output_fps().clamp(25, 60),
                 looped: m.end == VideoEnd::Loop,
                 mixer: &self.audio.mixer,
                 gain: target,

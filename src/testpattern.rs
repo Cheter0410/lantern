@@ -7,7 +7,9 @@
 //! parts: a hand turning once a second, one lit box per frame, a sweep
 //! across the picture and a flash every full second.
 
+#[cfg(test)]
 use crate::deck::Image;
+#[cfg(test)]
 use std::sync::Arc;
 
 /// What the picture says about the output it is on.
@@ -40,23 +42,80 @@ pub fn time_of_day() -> f64 {
     f64::from(now.num_seconds_from_midnight()) + f64::from(now.nanosecond() % 1_000_000_000) / 1e9
 }
 
-/// Keeps the still part, draws the moving part on top for each frame.
+/// A box of pixels: x, y, width, height.
+pub type Area = [i32; 4];
+
+/// What changed with the last picture.
+pub enum Changed {
+    /// Everything (first picture, other size or text).
+    All,
+    /// Only these areas.
+    Areas(Vec<Area>),
+}
+
+/// Keeps the still part and one working picture; for each frame it puts
+/// the still part back where things moved and draws the moving part again,
+/// so only a few small areas change (fast enough for 4K at 60 frames/s).
 #[derive(Default)]
 pub struct Pattern {
     base: Option<(Info, Canvas)>,
+    work: Option<Canvas>,
+    /// Areas drawn into last time (to be put back).
+    last: Vec<Area>,
 }
 
 impl Pattern {
-    pub fn render(&mut self, info: &Info, live: &Live) -> Image {
-        if self.base.as_ref().is_none_or(|(i, _)| i != info) {
-            self.base = Some((info.clone(), base(info)));
+    /// Draw the picture for `live` and say what changed.
+    pub fn draw(&mut self, info: &Info, live: &Live) -> Changed {
+        let fresh = self.base.as_ref().is_none_or(|(i, _)| i != info);
+        if fresh {
+            let b = base(info);
+            self.work = Some(b.clone());
+            self.base = Some((info.clone(), b));
+            self.last.clear();
         }
-        let Some((_, base)) = &self.base else {
-            return Image::black(info.w.max(1), info.h.max(1));
+        let (Some((_, base)), Some(work)) = (&self.base, self.work.as_mut()) else {
+            return Changed::All;
         };
-        let mut c = base.clone();
-        moving(&mut c, info, live);
-        c.into_image()
+        for a in &self.last {
+            work.restore(base, *a);
+        }
+        let now = moving(work, info, live);
+        let mut changed = std::mem::replace(&mut self.last, now.clone());
+        changed.extend(now);
+        if fresh {
+            Changed::All
+        } else {
+            Changed::Areas(changed)
+        }
+    }
+
+    /// The picture as drawn last (RGBA, size of the info).
+    pub fn pixels(&self) -> &[u8] {
+        self.work.as_ref().map_or(&[], |w| w.px.as_slice())
+    }
+
+    /// One area of the picture as tightly packed RGBA (clipped).
+    pub fn area(&self, a: Area) -> Option<(Area, Vec<u8>)> {
+        let w = self.work.as_ref()?;
+        let a = w.clip(a)?;
+        let mut out = Vec::with_capacity((a[2] * a[3] * 4) as usize);
+        for y in a[1]..a[1] + a[3] {
+            let i = ((y * w.w + a[0]) * 4) as usize;
+            out.extend_from_slice(&w.px[i..i + (a[2] * 4) as usize]);
+        }
+        Some((a, out))
+    }
+
+    /// Draw and give the whole picture (tests).
+    #[cfg(test)]
+    pub fn render(&mut self, info: &Info, live: &Live) -> Image {
+        self.draw(info, live);
+        Image {
+            w: info.w.max(1),
+            h: info.h.max(1),
+            rgba: Arc::new(self.pixels().to_vec()),
+        }
     }
 }
 
@@ -78,6 +137,7 @@ const DIM: Rgb = [150, 155, 165];
 const ACCENT: Rgb = [255, 196, 92];
 const LIVE_BLUE: Rgb = [59, 130, 246];
 const GREEN: Rgb = [34, 197, 94];
+const STEP_OFF: Rgb = [70, 74, 82];
 
 impl Canvas {
     fn new(w: u32, h: u32, fill: Rgb) -> Self {
@@ -92,11 +152,20 @@ impl Canvas {
         }
     }
 
-    fn into_image(self) -> Image {
-        Image {
-            w: self.w as u32,
-            h: self.h as u32,
-            rgba: Arc::new(self.px),
+    /// `a` cut to the picture, if anything is left.
+    fn clip(&self, a: Area) -> Option<Area> {
+        let (x0, y0) = (a[0].max(0), a[1].max(0));
+        let (x1, y1) = ((a[0] + a[2]).min(self.w), (a[1] + a[3]).min(self.h));
+        (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
+    }
+
+    /// Copy area `a` back from `from` (same size).
+    fn restore(&mut self, from: &Canvas, a: Area) {
+        let Some(a) = self.clip(a) else { return };
+        for y in a[1]..a[1] + a[3] {
+            let i = ((y * self.w + a[0]) * 4) as usize;
+            let n = (a[2] * 4) as usize;
+            self.px[i..i + n].copy_from_slice(&from.px[i..i + n]);
         }
     }
 
@@ -320,6 +389,47 @@ fn layout(info: &Info) -> Layout {
     }
 }
 
+/// Where the moving things are.
+struct Geo {
+    /// Panel lines that change (frame counter, time, timecode).
+    text: Area,
+    mid: i32,
+    /// Steps row: x, y, box width, boxes.
+    row: (i32, i32, i32, i32),
+    dial: Option<(f32, f32, f32)>,
+    flash: Option<(i32, i32)>,
+    /// Scrolling grating.
+    grating: Area,
+    /// Sweep strip across the picture.
+    sweep: Area,
+}
+
+fn geo(info: &Info) -> Geo {
+    let l = layout(info);
+    let (w, h, cell) = (l.w, l.h, l.cell);
+    let (px, py, pw, ph) = l.panel;
+    let (b, s) = (l.big, l.small);
+    let mid = py + ph / 2 + cell / 6;
+    let boxes = info.fps.clamp(1, 60) as i32;
+    let row_y = py + ph + cell / 3 + cell * 2 / 3 + (cell / 6).max(2) * 4 + cell / 4;
+    let bw = (pw / boxes).max(2);
+    let row_x = px + (pw - bw * boxes) / 2;
+    let dial_r = cell as f32 * 0.9;
+    let (dx, dy) = ((px - cell * 3 / 2) as f32, (py + ph + cell * 6 / 5) as f32);
+    let (fx, fy) = (px + pw + cell, py + ph + cell * 6 / 5 - cell / 2);
+    let gh = cell / 2;
+    let gy = py - cell - cell / 3 - gh - cell / 4;
+    Geo {
+        text: [px + 3, mid - 2, pw - 6, 9 * b + 7 * s + 4],
+        mid,
+        row: (row_x, row_y, bw, boxes),
+        dial: (dx - dial_r > 0.0).then_some((dx, dy, dial_r)),
+        flash: (fx + cell < w).then_some((fx, fy)),
+        grating: [px, gy, pw, gh],
+        sweep: [0, h - cell + cell / 4, w, cell / 2],
+    }
+}
+
 /// The still part.
 fn base(info: &Info) -> Canvas {
     let l = layout(info);
@@ -463,6 +573,44 @@ fn base(info: &Info) -> Canvas {
         let show = format!("SHOW: {}", info.show);
         c.text_centered(w / 2, py + ph - cell / 4 - 7 * s, s, &show, DIM);
     }
+
+    // The still parts of the moving things: steps row, dial face, flash
+    // box, grating frame, with their labels.
+    let g = geo(info);
+    let (row_x, row_y, bw, boxes) = g.row;
+    for i in 0..boxes {
+        c.rect(row_x + i * bw + 1, row_y, bw - 2, cell / 3, STEP_OFF);
+    }
+    c.text_centered(
+        w / 2,
+        row_y + cell / 3 + s * 2,
+        s,
+        "STEPS: 1 BOX PER FRAME",
+        DIM,
+    );
+    if let Some((dx, dy, r)) = g.dial {
+        let tau = std::f32::consts::TAU;
+        c.disc(dx, dy, r, PANEL);
+        c.ring(dx, dy, r, 2.0, WHITE);
+        for k in 0..12 {
+            let (sa, ca) = (k as f32 / 12.0 * tau).sin_cos();
+            c.line(
+                (dx + sa * r * 0.78, dy - ca * r * 0.78),
+                (dx + sa * r * 0.9, dy - ca * r * 0.9),
+                1.5,
+                DIM,
+            );
+        }
+        c.text_centered(dx as i32, (dy + r) as i32 + s * 2, s, "SMOOTH 1 S", DIM);
+    }
+    if let Some((fx, fy)) = g.flash {
+        c.rect(fx, fy, cell, cell, PANEL);
+        c.frame(fx, fy, cell, cell, 1, DIM);
+        c.text_centered(fx + cell / 2, fy + cell + s * 2, s, "1 S", DIM);
+    }
+    let gr = g.grating;
+    c.frame(gr[0] - 1, gr[1] - 1, gr[2] + 2, gr[3] + 2, 1, DIM);
+    c.text_centered(w / 2, gr[1] - 9 * s, s, "SMOOTH MOTION", DIM);
     c
 }
 
@@ -480,87 +628,118 @@ fn clock(secs: f64, fps: u32) -> String {
     )
 }
 
-/// The moving part.
-fn moving(c: &mut Canvas, info: &Info, live: &Live) {
+/// The moving part, drawn over the still one; returns the areas it drew
+/// into. Everything follows the real time (`time_of_day`), so a second is a
+/// second however fast the pictures come; the frame counter counts the
+/// pictures actually made.
+fn moving(c: &mut Canvas, info: &Info, live: &Live) -> Vec<Area> {
     let l = layout(info);
+    let g = geo(info);
     let (w, h, cell) = (l.w, l.h, l.cell);
-    let (px, py, pw, ph) = l.panel;
+    let (px, _, pw, _) = l.panel;
     let fps = info.fps.max(1);
-    let n = live.frame;
-    let in_second = (n % u64::from(fps)) as i32;
-    let s = l.small;
-    let b = l.big;
+    let t = live.time_of_day.max(0.0);
+    let frac = t - t.floor();
+    // Frame of the current second by the clock (0..fps-1).
+    let in_second = ((frac * f64::from(fps) + 1e-6).floor() as i32).min(fps as i32 - 1);
+    let (s, b) = (l.small, l.big);
+    let tau = std::f32::consts::TAU;
+    let mut areas = vec![g.text, g.grating, g.sweep];
 
-    // Frame counter and time of day in the panel.
-    let mid = py + ph / 2 + cell / 6;
-    let left = format!("FRAME {:07}", n);
-    let right = clock(live.time_of_day, fps);
-    c.text(px + cell / 3, mid, b, &left, WHITE);
+    // Frame counter, time of day, timecode in the panel.
+    let left = format!("FRAME {:07}", live.frame);
+    let right = clock(t, fps);
+    c.text(px + cell / 3, g.mid, b, &left, WHITE);
     let rw = text_width(&right, b);
-    c.text(px + pw - cell / 3 - rw, mid, b, &right, WHITE);
+    c.text(px + pw - cell / 3 - rw, g.mid, b, &right, WHITE);
     let tc = match &live.timecode {
         Some(t) => format!("TC IN {t}"),
         None => "TC IN OFF".to_string(),
     };
-    c.text_centered(w / 2, mid + 9 * b, s, &tc, LIVE_BLUE);
+    c.text_centered(w / 2, g.mid + 9 * b, s, &tc, LIVE_BLUE);
 
-    // One box per frame of the second: the lit one moves on every frame,
-    // a dropped or doubled frame shows as a jump or a stop.
-    let boxes = fps.min(60) as i32;
-    let row_y = py + ph + cell / 3 + cell * 2 / 3 + (cell / 6).max(2) * 4 + cell / 4;
-    let bw = (pw / boxes).max(2);
-    let row_x = px + (pw - bw * boxes) / 2;
-    for i in 0..boxes {
-        let lit = i == in_second % boxes;
-        let col = if lit { WHITE } else { [70, 74, 82] };
-        c.rect(row_x + i * bw + 1, row_y, bw - 2, cell / 3, col);
-    }
+    // STEPS: one box per frame of the second, by the clock. Each picture
+    // lights the next box; a dropped picture skips one, a doubled one stays.
+    let (row_x, row_y, bw, boxes) = g.row;
+    let lit = in_second * boxes / fps as i32;
+    let lit_box = [row_x + lit * bw + 1, row_y, bw - 2, cell / 3];
+    c.rect(lit_box[0], lit_box[1], lit_box[2], lit_box[3], WHITE);
+    areas.push(lit_box);
 
-    // A hand turning once a second, in a dial left of the panel.
-    let dial_r = cell as f32 * 0.9;
-    let (dx, dy) = ((px - cell * 3 / 2) as f32, (py + ph + cell * 6 / 5) as f32);
-    if dx - dial_r > 0.0 {
-        c.disc(dx, dy, dial_r, PANEL);
-        c.ring(dx, dy, dial_r, 2.0, WHITE);
-        for k in 0..fps.min(60) {
-            let a = k as f32 / fps.min(60) as f32 * std::f32::consts::TAU;
-            let (sa, ca) = a.sin_cos();
-            c.set(
-                (dx + sa * dial_r * 0.85) as i32,
-                (dy - ca * dial_r * 0.85) as i32,
-                DIM,
-            );
-        }
-        let a = in_second as f32 / fps as f32 * std::f32::consts::TAU;
-        let (sa, ca) = a.sin_cos();
+    // SMOOTH: a hand gliding round once a second (sub-pixel, anti-aliased).
+    if let Some((dx, dy, r)) = g.dial {
+        let (sa, ca) = (frac as f32 * tau).sin_cos();
         c.line(
             (dx, dy),
-            (dx + sa * dial_r * 0.8, dy - ca * dial_r * 0.8),
+            (dx + sa * r * 0.72, dy - ca * r * 0.72),
             3.0,
             ACCENT,
         );
         c.disc(dx, dy, 4.0, ACCENT);
+        let k = r * 0.74 + 3.0;
+        areas.push([
+            (dx - k).floor() as i32,
+            (dy - k).floor() as i32,
+            (2.0 * k).ceil() as i32 + 1,
+            (2.0 * k).ceil() as i32 + 1,
+        ]);
     }
 
-    // Flash on the first frame of every second (lines up with a beep or a
-    // camera; shows the output's delay against the clock).
-    let fx = px + pw + cell;
-    let fy = py + ph + cell * 6 / 5 - cell / 2;
-    if fx + cell < w {
-        let col = if in_second == 0 { WHITE } else { PANEL };
-        c.rect(fx, fy, cell, cell, col);
-        c.frame(fx, fy, cell, cell, 1, DIM);
-        c.text_centered(fx + cell / 2, fy + cell + s * 2, s, "1 S", DIM);
+    // Flash on the first frame of every full second (lines up with a beep or
+    // a camera; shows the output's delay against the clock).
+    if let Some((fx, fy)) = g.flash {
+        if in_second == 0 {
+            c.rect(fx + 1, fy + 1, cell - 2, cell - 2, WHITE);
+        }
+        areas.push([fx + 1, fy + 1, cell - 2, cell - 2]);
     }
 
-    // A bar sweeping across the whole picture, 4 seconds per pass, one step
-    // per frame: smooth motion, tearing and judder show here.
-    let period = u64::from(fps) * 4;
-    let k = (n % period) as f32 / period as f32;
-    let bar_w = (w / 200).max(2);
-    let x = (k * (w - bar_w) as f32) as i32;
-    let y0 = h - cell + cell / 4;
-    c.rect(x, y0, bar_w, cell / 2, WHITE);
+    // SMOOTH: a ball gliding along the big circle, once in 6 seconds.
+    let r = h as f32 * 0.45;
+    let (sa, ca) = (((t / 6.0).fract() as f32) * tau).sin_cos();
+    let ball = cell as f32 * 0.22;
+    let (bx, by) = (w as f32 / 2.0 + sa * r, h as f32 / 2.0 - ca * r);
+    c.disc(bx, by, ball, ACCENT);
+    let k = ball + 2.0;
+    areas.push([
+        (bx - k).floor() as i32,
+        (by - k).floor() as i32,
+        (2.0 * k).ceil() as i32 + 1,
+        (2.0 * k).ceil() as i32 + 1,
+    ]);
+
+    // SMOOTH: a soft grating scrolling sideways; judder, tearing and
+    // stepping show here.
+    let [gx, gy, gw, gh] = g.grating;
+    let period = (cell as f32 * 0.7).max(4.0);
+    let speed = 2.0 * cell as f32; // pixels per second
+    let phase = (t as f32 * speed).rem_euclid(period);
+    let column: Vec<u8> = (0..gw)
+        .map(|x| {
+            let v = 0.5 + 0.45 * ((x as f32 + phase) / period * tau).sin();
+            (v * 255.0).round() as u8
+        })
+        .collect();
+    for y in gy..gy + gh {
+        for (x, v) in column.iter().enumerate() {
+            c.set(gx + x as i32, y, [*v, *v, *v]);
+        }
+    }
+
+    // A bar sweeping across the whole picture, 4 seconds per pass, at its
+    // exact (sub-pixel) place: smooth motion, tearing and judder.
+    let bar_w = (w as f32 / 200.0).max(2.0);
+    let x = ((t / 4.0).fract() as f32) * (w as f32 - bar_w);
+    let [_, y0, _, sh] = g.sweep;
+    for xi in x.floor() as i32..=(x + bar_w).ceil() as i32 {
+        let cover = ((xi + 1) as f32).min(x + bar_w) - (xi as f32).max(x);
+        if cover > 0.0 {
+            for y in y0..y0 + sh {
+                c.blend(xi, y, WHITE, cover);
+            }
+        }
+    }
+    areas
 }
 
 #[cfg(test)]
@@ -602,55 +781,47 @@ mod tests {
     }
 
     #[test]
-    fn moves_every_frame_and_flashes_each_second() {
+    fn follows_the_clock_and_flashes_on_the_second() {
         let mut p = Pattern::default();
-        let i = info(1280, 720);
-        let a = p.render(
-            &i,
-            &Live {
-                frame: 0,
-                ..Default::default()
-            },
-        );
-        let b = p.render(
-            &i,
-            &Live {
-                frame: 1,
-                ..Default::default()
-            },
-        );
-        let c = p.render(
-            &i,
-            &Live {
-                frame: 1,
-                ..Default::default()
-            },
-        );
-        assert!(a.rgba != b.rgba, "frame 0 and 1 differ");
-        assert!(b.rgba == c.rgba, "the same frame is the same picture");
+        let i = info(1280, 720); // 25 fps
+        let at = |p: &mut Pattern, frame: u64, t: f64| {
+            p.render(
+                &i,
+                &Live {
+                    frame,
+                    time_of_day: t,
+                    ..Default::default()
+                },
+            )
+        };
+        let a = at(&mut p, 0, 10.0);
+        let b = at(&mut p, 1, 10.05);
+        let c = at(&mut p, 1, 10.05);
+        assert!(a.rgba != b.rgba, "the next frame differs");
+        assert!(b.rgba == c.rgba, "the same moment is the same picture");
         let l = layout(&i);
         let (px0, py, pw, ph) = l.panel;
         let (fx, fy) = (
-            px0 + pw + l.cell + 5,
-            py + ph + l.cell * 6 / 5 - l.cell / 2 + 5,
+            (px0 + pw + l.cell + 5) as u32,
+            (py + ph + l.cell * 6 / 5 - l.cell / 2 + 5) as u32,
         );
+        assert_eq!(px(&a, fx, fy), WHITE, "flash at the full second");
+        assert_eq!(px(&b, fx, fy), PANEL);
+        // The flash comes with the clock, not after a number of pictures:
+        // only 3 pictures made, but a second has passed.
+        let d = at(&mut p, 3, 11.01);
         assert_eq!(
-            px(&a, fx as u32, fy as u32),
+            px(&d, fx, fy),
             WHITE,
-            "flash at the full second"
+            "a second later, whatever the frame count"
         );
-        assert_eq!(px(&b, fx as u32, fy as u32), PANEL);
-        let d = p.render(
-            &i,
-            &Live {
-                frame: 25,
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            px(&d, fx as u32, fy as u32),
-            WHITE,
-            "and again a second later"
+        let e = at(&mut p, 50, 11.5);
+        assert_eq!(px(&e, fx, fy), PANEL);
+        // Smooth parts move between two moments inside one frame too.
+        let f = at(&mut p, 1, 10.055);
+        assert!(
+            f.rgba != b.rgba,
+            "sub-frame times give other pictures (smooth)"
         );
     }
 
@@ -699,5 +870,39 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         out.save(std::path::Path::new(&dir).join("testpattern-1080.png"))
             .unwrap();
+    }
+
+    /// Timing (run by hand: cargo test --release -- --ignored timing).
+    #[test]
+    #[ignore]
+    fn timing() {
+        let mut p = Pattern::default();
+        for (w, h) in [(1920, 1080), (3840, 2160)] {
+            let i = info(w, h);
+            p.draw(&i, &Live::default());
+            let t0 = std::time::Instant::now();
+            let mut bytes = 0;
+            for n in 0..120 {
+                let live = Live {
+                    frame: n,
+                    time_of_day: n as f64 / 60.0,
+                    ..Default::default()
+                };
+                if let Changed::Areas(areas) = p.draw(&i, &live) {
+                    for a in areas {
+                        if let Some((_, px)) = p.area(a) {
+                            bytes += px.len();
+                        }
+                    }
+                }
+            }
+            let per = t0.elapsed().as_secs_f64() / 120.0;
+            eprintln!(
+                "{w}x{h}: {:.2} ms per picture, {:.0} kB to upload (full: {} kB)",
+                per * 1e3,
+                bytes as f64 / 120.0 / 1024.0,
+                w * h * 4 / 1024
+            );
+        }
     }
 }

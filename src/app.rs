@@ -93,6 +93,8 @@ struct Disp {
     size: [f32; 2],
     px: [u32; 2],
     here: bool,
+    /// Highest refresh rate at its resolution (Hz), if known.
+    hz: Option<u32>,
 }
 
 type Clips = Vec<(usize, Result<media::Clip, String>)>;
@@ -449,6 +451,34 @@ impl App {
             .unwrap_or((1920, 1080))
     }
 
+    /// The display's highest refresh rate, if one is chosen and known.
+    fn display_hz(&self) -> Option<u32> {
+        self.show
+            .output
+            .display
+            .and_then(|d| self.displays.get(d))
+            .and_then(|d| d.hz)
+    }
+
+    /// Frames per second of the outputs (display, test picture, videos).
+    fn output_fps(&self) -> u32 {
+        let o = &self.show.output;
+        if o.fps_auto {
+            self.display_hz().unwrap_or(60).clamp(24, 240)
+        } else {
+            o.fps.clamp(1, 240)
+        }
+    }
+
+    /// NDI's frame rate: automatic follows the display up to 60.
+    fn ndi_fps(&self) -> u32 {
+        if self.show.output.fps_auto {
+            self.output_fps().min(60)
+        } else {
+            self.output_fps()
+        }
+    }
+
     fn transition_of(&self, i: usize) -> Transition {
         match self.show.slides.get(i).map(|s| s.transition) {
             Some(TransitionCfg::Cut) => Transition::Cut,
@@ -604,6 +634,8 @@ impl App {
             return;
         }
         let size = self.output_size();
+        let fps = self.ndi_fps();
+        let o = &self.show.output;
         let name = if o.ndi_name.trim().is_empty() {
             "Lantern".to_string()
         } else {
@@ -612,10 +644,10 @@ impl App {
         let fresh = self
             .ndi
             .as_ref()
-            .is_some_and(|s| s.name == name && s.size == size && s.fps == o.fps);
+            .is_some_and(|s| s.name == name && s.size == size && s.fps == fps);
         if !fresh {
             self.ndi = None;
-            match ndi::Sender::start(&name, size.0, size.1, o.fps, self.audio.mixer.clone()) {
+            match ndi::Sender::start(&name, size.0, size.1, fps, self.audio.mixer.clone()) {
                 Ok(s) => {
                     self.ndi = Some(s);
                     self.ndi_error = None;
@@ -1708,6 +1740,7 @@ impl App {
     }
 
     fn settings_output(&mut self, ui: &mut egui::Ui) {
+        let hz = self.display_hz();
         let o = &mut self.show.output;
         let label = |d: Option<usize>, ds: &[Disp]| match d {
             None => "Off".to_string(),
@@ -1763,15 +1796,47 @@ impl App {
                     );
                 });
                 ui.end_row();
-                if o.ndi {
-                    ui.label(RichText::new("Frames/s").color(MUTED));
-                    segmented(
-                        ui,
-                        &mut o.fps,
-                        &[(25, "25"), (30, "30"), (50, "50"), (60, "60")],
-                    );
-                    ui.end_row();
-                }
+                ui.label(RichText::new("Frame rate").color(MUTED));
+                let auto_label = match hz {
+                    Some(hz) => format!("Highest of the display ({hz})"),
+                    None => "Highest of the display (60)".to_string(),
+                };
+                let shown = if o.fps_auto {
+                    auto_label.clone()
+                } else {
+                    format!("{} frames/s", o.fps)
+                };
+                egui::ComboBox::from_id_salt("fps")
+                    .width(320.0)
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(o.fps_auto, auto_label).clicked() {
+                            o.fps_auto = true;
+                        }
+                        let mut rates = vec![24, 25, 30, 50, 60, 100, 120, 144];
+                        if let Some(hz) = hz {
+                            if !rates.contains(&hz) {
+                                rates.push(hz);
+                                rates.sort_unstable();
+                            }
+                        }
+                        for r in rates {
+                            let too_fast = hz.is_some_and(|hz| r > hz);
+                            let text = if too_fast {
+                                format!("{r} frames/s (more than the display shows)")
+                            } else {
+                                format!("{r} frames/s")
+                            };
+                            if ui
+                                .selectable_label(!o.fps_auto && o.fps == r, text)
+                                .clicked()
+                            {
+                                o.fps_auto = false;
+                                o.fps = r;
+                            }
+                        }
+                    });
+                ui.end_row();
             });
         ui.add_space(6.0);
         if self.show.output.ndi {
@@ -1784,8 +1849,9 @@ impl App {
                 let (w, h) = self.output_size();
                 ui.label(
                     RichText::new(format!(
-                        "NDI source \"{}\" sending {w}×{h}",
-                        self.ndi_name()
+                        "NDI source \"{}\" sending {w}×{h} at {} frames/s",
+                        self.ndi_name(),
+                        self.ndi_fps()
                     ))
                     .color(OK),
                 );
@@ -2606,12 +2672,20 @@ impl eframe::App for App {
                     .map(|m| {
                         let (size, pos, scale) =
                             (m.size(), m.position(), m.scale_factor().max(0.1) as f32);
+                        let best = m
+                            .video_modes()
+                            .filter(|v| v.size() == size)
+                            .map(|v| v.refresh_rate_millihertz())
+                            .chain(m.refresh_rate_millihertz())
+                            .max()
+                            .filter(|mhz| *mhz > 0);
                         Disp {
                             name: m.name().unwrap_or_else(|| "Display".into()),
                             pos: [pos.x as f32 / scale, pos.y as f32 / scale],
                             size: [size.width as f32 / scale, size.height as f32 / scale],
                             px: [size.width, size.height],
                             here: current.as_ref() == Some(&m),
+                            hz: best.map(|mhz| (mhz + 500) / 1000),
                         }
                     })
                     .collect();

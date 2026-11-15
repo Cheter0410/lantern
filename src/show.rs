@@ -145,7 +145,10 @@ pub struct Output {
     pub ndi: bool,
     pub ndi_name: String,
     pub resolution: Resolution,
+    /// Frames per second when not automatic.
     pub fps: u32,
+    /// Frame rate: the highest the display supports (NDI alone: 60).
+    pub fps_auto: bool,
 }
 
 impl Default for Output {
@@ -155,7 +158,8 @@ impl Default for Output {
             ndi: false,
             ndi_name: "Lantern".into(),
             resolution: Resolution::Auto,
-            fps: 30,
+            fps: 60,
+            fps_auto: true,
         }
     }
 }
@@ -502,5 +506,14 @@ mod tests {
             .contains("\"talk.pptx\""));
         assert_eq!(Show::load(&f).unwrap(), s);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn older_files_get_the_automatic_frame_rate() {
+        let o: Output = serde_json::from_str(r#"{"display":1,"ndi":false,"fps":30}"#).unwrap();
+        assert!(o.fps_auto, "files from before 0.3.4 follow the display");
+        assert_eq!(o.display, Some(1));
+        let o: Output = serde_json::from_str(r#"{"fps":25,"fps_auto":false}"#).unwrap();
+        assert!(!o.fps_auto && o.fps == 25);
     }
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.4
+
+- Test picture runs on the real clock: the 1 s flash comes exactly on every full second and the frame
+  boxes move by time, however fast the pictures come (a dropped picture shows as a skipped box).
+  Before, it counted pictures and ran slow when fewer came than set.
+- Test picture is about ten times faster: only the moving parts are drawn again and sent to the
+  graphics card (0.6 ms per picture in Full HD, 2.9 ms in 4K).
+- Smooth motion in the test picture: a scrolling soft grating, a hand gliding round once a second, a
+  ball gliding along the big circle and a sweep bar at its exact sub-pixel place – judder, tearing and
+  stepping show there; the steps row and the flash stay for counting frames.
+- Settings › Output › Frame rate for all outputs: by default the highest rate the chosen display
+  supports (60 without a display; NDI follows up to 60), or a fixed 24 to 144 frames/s. Older show
+  files switch to the automatic rate.
+
 ## 0.3.3
 
 - GO+, GO−, Blackout and Clear stay in the same place on every slide: the video bar under the Live

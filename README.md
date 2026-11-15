@@ -18,7 +18,9 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   (needs the NDI runtime, e.g. with NDI Tools from ndi.video).
 - **Test picture:** Settings › Output switches the outputs to a moving test picture in their own
   resolution (geometry, cropping, levels, sharpness, frame counter, clock, timecode, dropped frames
-  and delay at a glance); the top bar shows it is on air and turns it off.
+  and delay, smooth motion for judder and tearing); the top bar shows it is on air and turns it off.
+- **Frame rate:** by default the highest the display supports (Settings › Output › Frame rate), or a
+  fixed rate.
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
   `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`; for the live slide's video or sound
   `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`, `/video/seek <s>`,
