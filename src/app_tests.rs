@@ -146,6 +146,17 @@ fn live_mode_locks_the_show() {
     h.key_press(Key::Space);
     h.run_steps(3);
     assert_eq!(h.state().player.current, Some(0), "GO works in Live");
+    run_until(&mut h, "the live and next pictures", |a| {
+        a.fulls.contains_key(&0) && a.fulls.contains_key(&1)
+    });
+    // Hovering a button must not make it grow (nothing moves).
+    h.get_by_label("Einstellungen").hover();
+    h.run_steps(3);
+    let v = h.ctx.global_style().visuals.clone();
+    for w in [&v.widgets.hovered, &v.widgets.active, &v.widgets.inactive] {
+        assert_eq!(w.expansion, 0.0, "buttons keep their size");
+    }
+    shots.take(&mut h, "2b-live-running-hover");
 
     // Live: the settings can be looked at, not changed.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);

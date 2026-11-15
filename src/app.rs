@@ -23,13 +23,25 @@ const CARD: Color32 = Color32::from_rgb(28, 31, 38);
 const LINE: Color32 = Color32::from_rgb(44, 48, 58);
 const TEXT: Color32 = Color32::from_rgb(232, 235, 239);
 const MUTED: Color32 = Color32::from_rgb(138, 144, 158);
-const LIVE: Color32 = Color32::from_rgb(34, 197, 94);
-const NEXT: Color32 = Color32::from_rgb(245, 179, 66);
+// Colour meaning as in Show Master: next = green, on air / running = blue,
+// Live mode = red, Edit mode = blue, error = red.
+/// Good / connected (status dots).
+const OK: Color32 = Color32::from_rgb(34, 197, 94);
+/// The next slide.
+const NEXT: Color32 = Color32::from_rgb(34, 197, 94);
+const NEXT_BG: Color32 = Color32::from_rgb(20, 60, 36);
+/// The slide on the output.
+const CURRENT: Color32 = Color32::from_rgb(59, 130, 246);
+const CURRENT_BG: Color32 = Color32::from_rgb(23, 42, 82);
+const GO: Color32 = Color32::from_rgb(22, 163, 74);
+const MODE_LIVE: Color32 = Color32::from_rgb(220, 38, 38);
+const MODE_EDIT: Color32 = Color32::from_rgb(37, 99, 235);
 const TC: Color32 = Color32::from_rgb(96, 165, 250);
 const DANGER: Color32 = Color32::from_rgb(239, 68, 68);
 const AMBER: Color32 = Color32::from_rgb(255, 196, 92);
-const LIVE_BG: Color32 = Color32::from_rgb(18, 44, 30);
 const HOVER: Color32 = Color32::from_rgb(26, 29, 35);
+/// Background of the clock cells.
+const CLOCK_BG: Color32 = Color32::from_rgb(10, 11, 14);
 
 /// App settings kept between starts.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -736,7 +748,17 @@ impl App {
         let ctx = ui.ctx().clone();
         ui.horizontal_centered(|ui| {
             ui.label(RichText::new("Lantern").size(18.0).strong().color(AMBER));
-            ui.add_space(14.0);
+            ui.add_space(10.0);
+            if self.live() {
+                ui.label(
+                    RichText::new(" LIVE ")
+                        .strong()
+                        .size(15.0)
+                        .color(Color32::WHITE)
+                        .background_color(MODE_LIVE),
+                );
+                ui.add_space(6.0);
+            }
             if self.deck.is_some() || self.loading.is_some() {
                 let name = self
                     .show
@@ -770,12 +792,14 @@ impl App {
                 mode_switch(ui, &mut live);
                 self.set_live(live);
                 ui.add_space(12.0);
-                ui.label(RichText::new(clock()).monospace().size(15.0).color(MUTED));
+                if !self.live() {
+                    ui.label(RichText::new(clock()).monospace().size(15.0).color(MUTED));
+                }
                 ui.add_space(8.0);
                 // Outputs and timecode, as quiet status dots.
                 if self.show.output.ndi {
                     let ok = self.ndi.is_some();
-                    status(ui, "NDI", if ok { LIVE } else { DANGER }).on_hover_text(
+                    status(ui, "NDI", if ok { OK } else { DANGER }).on_hover_text(
                         self.ndi_error
                             .clone()
                             .unwrap_or_else(|| format!("Sendet als „{}“", self.ndi_name())),
@@ -783,7 +807,7 @@ impl App {
                 }
                 match self.show.output.display {
                     Some(d) if d < self.displays.len() => {
-                        status(ui, &format!("Bildschirm {}", d + 1), LIVE);
+                        status(ui, &format!("Bildschirm {}", d + 1), OK);
                     }
                     Some(d) => {
                         status(ui, &format!("Bildschirm {} fehlt", d + 1), DANGER);
@@ -798,7 +822,7 @@ impl App {
                     }
                     None => {}
                 }
-                if self.show.timecode.source != TcSource::Off {
+                if self.show.timecode.source != TcSource::Off && !self.live() {
                     let (text, color) = match self.tc.reading() {
                         None => ("--:--:--:--".to_string(), MUTED),
                         Some(r) => (
@@ -851,7 +875,9 @@ impl App {
                     );
                     let p = ui.painter();
                     let fill = if live {
-                        LIVE_BG
+                        CURRENT_BG
+                    } else if is_next {
+                        NEXT_BG
                     } else if sel {
                         CARD
                     } else if resp.hovered() {
@@ -861,7 +887,7 @@ impl App {
                     };
                     p.rect_filled(rect, 6.0, fill);
                     let accent = if live {
-                        Some(LIVE)
+                        Some(CURRENT)
                     } else if is_next {
                         Some(NEXT)
                     } else {
@@ -982,6 +1008,10 @@ impl App {
     }
 
     fn center(&mut self, ui: &mut egui::Ui) {
+        if self.live() {
+            self.clock_strip(ui);
+            ui.add_space(14.0);
+        }
         let next = self.next_index();
         let avail = ui.available_size();
         let aspect = {
@@ -998,7 +1028,7 @@ impl App {
             ui.vertical(|ui| {
                 ui.set_width(live_w);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("LIVE").small().strong().color(LIVE));
+                    ui.label(RichText::new("LIVE").small().strong().color(CURRENT));
                     let what = match self.player.current {
                         Some(c) => format!("Folie {} von {total}", c + 1),
                         None => "Schwarz".into(),
@@ -1030,7 +1060,14 @@ impl App {
                 ui.painter().rect_stroke(
                     r,
                     4.0,
-                    Stroke::new(2.0, if self.player.blackout { DANGER } else { LIVE }),
+                    Stroke::new(
+                        2.0,
+                        if self.player.blackout {
+                            DANGER
+                        } else {
+                            CURRENT
+                        },
+                    ),
                     egui::StrokeKind::Outside,
                 );
                 if self.player.blackout {
@@ -1060,7 +1097,7 @@ impl App {
                     ui.allocate_exact_size(Vec2::new(next_w, next_w / aspect), Sense::hover());
                 paint_output(ui.painter(), r, None, self.tex(next), 1.0, 0.0);
                 ui.painter()
-                    .rect_stroke(r, 4.0, Stroke::new(1.0, LINE), egui::StrokeKind::Outside);
+                    .rect_stroke(r, 4.0, Stroke::new(1.0, NEXT), egui::StrokeKind::Outside);
                 if next.is_none() {
                     ui.painter().text(
                         r.center(),
@@ -1105,12 +1142,12 @@ impl App {
             );
             let fill = match (next.is_some(), go.hovered(), go.is_pointer_button_down_on()) {
                 (false, ..) => CARD,
-                (true, _, true) => Color32::from_rgb(22, 150, 70),
-                (true, true, _) => Color32::from_rgb(52, 214, 112),
-                _ => LIVE,
+                (true, _, true) => Color32::from_rgb(21, 128, 61),
+                (true, true, _) => Color32::from_rgb(28, 180, 84),
+                _ => GO,
             };
             let ink = if next.is_some() {
-                Color32::BLACK
+                Color32::WHITE
             } else {
                 MUTED
             };
@@ -1186,6 +1223,105 @@ impl App {
                     }
                 });
             });
+    }
+
+    /// Live: big clocks across the top (time of day, timecode, time on the
+    /// slide, slide count), drawn like Show Master's clock strip.
+    fn clock_strip(&mut self, ui: &mut egui::Ui) {
+        let h = (ui.available_height() * 0.13).clamp(78.0, 112.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
+        let gap = 8.0;
+        // Timecode needs the most room.
+        let weights = [1.0, 1.4, 0.8, 0.8];
+        let total: f32 = weights.iter().sum();
+        let avail = rect.width() - gap * (weights.len() as f32 - 1.0);
+        let mut x = rect.left();
+        let cells: Vec<Rect> = weights
+            .iter()
+            .map(|w| {
+                let width = avail * w / total;
+                let r = Rect::from_min_size(pos2(x, rect.top()), Vec2::new(width, h));
+                x += width + gap;
+                r
+            })
+            .collect();
+        // One digit size for all of them (calmer than four sizes).
+        let digits_h = (h - 30.0) * 0.95;
+        let fit = |i: usize, chars: usize| fit_digits(chars, cells[i].width() - 24.0, digits_h);
+        let size = fit(0, 8).min(fit(1, 11)).min(fit(2, 5)).min(fit(3, 7));
+
+        clock_cell(ui, cells[0], "Uhrzeit", &clock(), TEXT, None, size);
+
+        let src = self.show.timecode.source;
+        let reading = self.tc.reading();
+        let (tc, tc_color, accent) = match (src, reading) {
+            (TcSource::Off, _) => ("--:--:--:--".to_string(), MUTED, None),
+            (_, None) => ("--:--:--:--".to_string(), MUTED, None),
+            (_, Some(r)) => (
+                show::format_tc(r.secs, r.fps),
+                if r.running { TEXT } else { MUTED },
+                r.running.then_some(CURRENT),
+            ),
+        };
+        let free = clock_cell(ui, cells[1], "Timecode", &tc, tc_color, accent, size);
+        let (badge_text, badge_color, on) = match (src, reading) {
+            (TcSource::Off, _) => ("AUS".to_string(), MUTED, false),
+            (_, None) => ("KEIN SIGNAL".to_string(), DANGER, true),
+            (s, Some(r)) => (
+                format!(
+                    "{} {}{}",
+                    if s == TcSource::Ltc {
+                        "LTC"
+                    } else {
+                        "RTP-MIDI"
+                    },
+                    r.fps.round(),
+                    if r.running { "" } else { " STEHT" }
+                ),
+                if r.running { OK } else { AMBER },
+                r.running,
+            ),
+        };
+        badge(
+            ui,
+            free.right(),
+            free.center().y,
+            &badge_text,
+            on,
+            badge_color,
+        )
+        .on_hover_text(self.tc.status());
+
+        let on_slide = self.player.current.map(|_| {
+            let s = self.player.since.elapsed().as_secs();
+            format!("{}:{:02}", s / 60, s % 60)
+        });
+        clock_cell(
+            ui,
+            cells[2],
+            "Auf der Folie",
+            on_slide.as_deref().unwrap_or("-:--"),
+            if on_slide.is_some() { TEXT } else { MUTED },
+            None,
+            size,
+        );
+        let count = match self.player.current {
+            Some(c) => format!("{}/{}", c + 1, self.slides.len()),
+            None => format!("-/{}", self.slides.len()),
+        };
+        clock_cell(
+            ui,
+            cells[3],
+            "Folie",
+            &count,
+            if self.player.current.is_some() {
+                TEXT
+            } else {
+                MUTED
+            },
+            self.player.current.map(|_| CURRENT),
+            size,
+        );
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
@@ -1383,7 +1519,7 @@ impl App {
                         RichText::new(
                             "Live: nur ansehen. Zum Ändern auf „Bearbeiten“ wechseln (Strg/Cmd+E).",
                         )
-                        .color(LIVE),
+                        .color(MODE_LIVE),
                     );
                     ui.add_space(6.0);
                 }
@@ -1478,7 +1614,7 @@ impl App {
                 let (w, h) = self.output_size();
                 ui.label(
                     RichText::new(format!("NDI-Quelle „{}“ sendet {w}×{h}", self.ndi_name()))
-                        .color(LIVE),
+                        .color(OK),
                 );
             }
         }
@@ -1567,7 +1703,7 @@ impl App {
                     );
                 } else {
                     ui.label(
-                        RichText::new(format!("Verbunden mit {}", peers.join(", "))).color(LIVE),
+                        RichText::new(format!("Verbunden mit {}", peers.join(", "))).color(OK),
                     );
                 }
                 let mut connect: Option<String> = None;
@@ -1626,7 +1762,7 @@ impl App {
             ui.add(egui::DragValue::new(&mut self.show.osc_port).range(1024..=65000));
             match (&self.osc, &self.osc_error) {
                 (Some(_), _) => {
-                    ui.label(RichText::new("empfängt").color(LIVE));
+                    ui.label(RichText::new("empfängt").color(OK));
                 }
                 (None, Some((_, e))) => {
                     ui.label(RichText::new(e).color(DANGER));
@@ -1964,6 +2100,93 @@ fn status(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     resp
 }
 
+/// Font size that fits `chars` monospace digits into `width` and `height`.
+fn fit_digits(chars: usize, width: f32, height: f32) -> f32 {
+    // Monospace glyphs are about 0.6 em wide.
+    let by_width = width / (chars.max(1) as f32 * 0.62);
+    by_width.min(height).clamp(12.0, 72.0)
+}
+
+/// A clock cell: caption on top, large tabular digits below, an optional
+/// accent bar on the left. Returns the free part of the caption row.
+fn clock_cell(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    caption: &str,
+    value: &str,
+    color: Color32,
+    accent: Option<Color32>,
+    size: f32,
+) -> Rect {
+    let p = ui.painter_at(rect);
+    p.rect(
+        rect,
+        6.0,
+        CLOCK_BG,
+        Stroke::new(1.0, LINE),
+        egui::StrokeKind::Inside,
+    );
+    if let Some(a) = accent {
+        p.rect_filled(
+            Rect::from_min_size(rect.min, Vec2::new(4.0, rect.height())),
+            CornerRadius {
+                nw: 6,
+                sw: 6,
+                ne: 0,
+                se: 0,
+            },
+            a,
+        );
+    }
+    let pad = 12.0;
+    let cap = p.text(
+        rect.min + Vec2::new(pad, 7.0),
+        egui::Align2::LEFT_TOP,
+        caption.to_uppercase(),
+        egui::FontId::proportional(12.0),
+        accent.unwrap_or(MUTED),
+    );
+    let digits = Rect::from_min_max(
+        pos2(rect.left() + pad, rect.top() + 24.0),
+        pos2(rect.right() - pad, rect.bottom() - 4.0),
+    );
+    p.text(
+        digits.left_center(),
+        egui::Align2::LEFT_CENTER,
+        value,
+        egui::FontId::monospace(size),
+        color,
+    );
+    Rect::from_min_max(
+        pos2(cap.right() + 8.0, rect.top() + 5.0),
+        pos2(rect.right() - 8.0, rect.top() + 21.0),
+    )
+}
+
+/// A small badge painted leftwards from `right` (e.g. "LTC 25").
+fn badge(
+    ui: &mut egui::Ui,
+    right: f32,
+    center_y: f32,
+    text: &str,
+    on: bool,
+    color: Color32,
+) -> egui::Response {
+    let font = egui::FontId::proportional(11.0);
+    let fg = if on { Color32::BLACK } else { color };
+    let g = ui.painter().layout_no_wrap(text.to_string(), font, fg);
+    let size = g.size() + Vec2::new(10.0, 3.0);
+    let r = Rect::from_min_size(pos2(right - size.x, center_y - size.y / 2.0), size);
+    if on {
+        ui.painter().rect_filled(r, 3.0, color);
+    } else {
+        ui.painter()
+            .rect_stroke(r, 3.0, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    }
+    ui.painter().galley(r.min + Vec2::new(5.0, 1.5), g, fg);
+    ui.interact(r, ui.scope_id().with(("badge", text)), Sense::hover())
+}
+
 /// A quiet button for the top bar and panel headers.
 fn flat_button(text: &str) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).color(TEXT))
@@ -1987,26 +2210,28 @@ fn tool_button(text: &str, on: Option<Color32>, h: f32) -> egui::Button<'static>
 
 /// Bearbeiten | Live. Live is painted green so it is clear the show is locked.
 fn mode_switch(ui: &mut egui::Ui, live: &mut bool) {
-    ui.horizontal(|ui| {
+    // A scope keeps the top bar's centred layout, so the pills line up with
+    // the other buttons.
+    ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         // Right-to-left layout: "Live" first so it ends up on the right.
         for (v, label, on_fill, tip) in [
             (
                 true,
                 "Live",
-                LIVE,
+                MODE_LIVE,
                 "Show läuft: Folien-Einstellungen, Öffnen und Einstellungen gesperrt (Strg/Cmd+E)",
             ),
             (
                 false,
                 "Bearbeiten",
-                AMBER,
+                MODE_EDIT,
                 "Folien, Ausgänge und Timecode einrichten (Strg/Cmd+E)",
             ),
         ] {
             let on = *live == v;
             let b = egui::Button::new(RichText::new(label).strong().color(if on {
-                Color32::BLACK
+                Color32::WHITE
             } else {
                 MUTED
             }))
@@ -2080,6 +2305,16 @@ fn style(ctx: &egui::Context) {
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 53, 64);
     v.widgets.active.weak_bg_fill = Color32::from_rgb(58, 64, 77);
     v.selection.bg_fill = Color32::from_rgb(120, 86, 20);
+    // Buttons keep their size on hover and press: nothing moves.
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.expansion = 0.0;
+    }
     ctx.set_visuals(v);
     let mut s = (*ctx.global_style()).clone();
     s.spacing.button_padding = Vec2::new(12.0, 6.0);
@@ -2171,7 +2406,7 @@ impl eframe::App for App {
                     .fill(PANEL)
                     .inner_margin(Margin::symmetric(14, 8))
                     .stroke(if self.live() {
-                        Stroke::new(1.0, LIVE)
+                        Stroke::new(2.0, MODE_LIVE)
                     } else {
                         Stroke::NONE
                     }),
