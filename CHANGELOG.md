@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- The whole interface is in English now (buttons, settings, messages, LibreOffice and NDI
+  notices).
+- Buttons keep their size on hover: no outline that squeezes them, hover only lightens the fill.
+- Switching between Edit and Live no longer shows a message in the corner.
+
 ## 0.1.2
 
 - Colours as in Show Master: the next slide is green, the slide on the output blue; Live mode is

@@ -9,7 +9,7 @@ fn q(s: &str) -> String {
 /// The script the terminal runs: title, the command, and the window stays open.
 fn script(title: &str, command: &str) -> String {
     format!(
-        "#!/bin/bash\nprintf '\\033[1m%s\\033[0m\\n\\n' {}\n{}\nprintf '\\nFertig. Enter schließt dieses Fenster. '\nread -r _\n",
+        "#!/bin/bash\nprintf '\\033[1m%s\\033[0m\\n\\n' {}\n{}\nprintf '\\nDone. Press Enter to close this window. '\nread -r _\n",
         q(title),
         command
     )

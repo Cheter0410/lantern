@@ -122,13 +122,13 @@ fn load() -> Result<Api, String> {
                 ($n:literal) => {
                     match lib.get($n) {
                         Ok(s) => *s,
-                        Err(e) => return Err(format!("NDI-Bibliothek unvollständig: {e}")),
+                        Err(e) => return Err(format!("NDI library incomplete: {e}")),
                     }
                 };
             }
             let init: unsafe extern "C" fn() -> bool = sym!(b"NDIlib_initialize\0");
             if !init() {
-                return Err("NDI läuft auf diesem Prozessor nicht".into());
+                return Err("NDI does not run on this processor".into());
             }
             return Ok(Api {
                 send_create: sym!(b"NDIlib_send_create\0"),
@@ -138,7 +138,7 @@ fn load() -> Result<Api, String> {
             });
         }
     }
-    Err("NDI-Runtime nicht gefunden – NDI Tools von ndi.video installieren und Lantern neu starten.".into())
+    Err("NDI runtime not found – install NDI Tools from ndi.video and restart Lantern.".into())
 }
 
 /// What the output shows, with the timing to animate it.
@@ -234,7 +234,7 @@ impl Sender {
         let scene: Arc<Mutex<Option<Scene>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
         let (scene2, stop2) = (scene.clone(), stop.clone());
-        let cname = CString::new(name).map_err(|_| "Ungültiger NDI-Name")?;
+        let cname = CString::new(name).map_err(|_| "Invalid NDI name")?;
         let fps = fps.clamp(1, 120);
         std::thread::Builder::new()
             .name("lantern-ndi".into())

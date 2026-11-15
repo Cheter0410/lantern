@@ -54,7 +54,7 @@ impl Resolution {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Resolution::Auto => "Wie der Bildschirm",
+            Resolution::Auto => "Same as the display",
             Resolution::Hd720 => "1280 × 720",
             Resolution::Hd1080 => "1920 × 1080",
             Resolution::Uhd2160 => "3840 × 2160",

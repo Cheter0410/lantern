@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "lantern"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "cpal",
@@ -3935,7 +3935,7 @@ dependencies = [
 
 [[package]]
 name = "sm-mdns"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "gethostname",
  "mdns-sd",
@@ -3946,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "sm-rtpmidi"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -3954,7 +3954,7 @@ dependencies = [
 
 [[package]]
 name = "sm-timecode"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

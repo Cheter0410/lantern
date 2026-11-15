@@ -209,14 +209,11 @@ impl App {
         self.settings.save();
         if on {
             self.selected = None;
-            self.note("Live – Änderungen gesperrt");
-        } else {
-            self.note("Bearbeiten");
         }
     }
 
     fn locked(&mut self) {
-        self.note("Im Live-Modus gesperrt – zum Ändern auf „Bearbeiten“ (Strg/Cmd+E)");
+        self.note("Locked in Live mode – switch to Edit to change it (Ctrl/Cmd+E)");
     }
 
     // ---------------------------------------------------------------- files
@@ -264,7 +261,7 @@ impl App {
         self.mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.changed_on_disk = false;
         self.load_error = None;
-        let status = Arc::new(Mutex::new("Lese die Präsentation…".to_string()));
+        let status = Arc::new(Mutex::new("Reading the presentation…".to_string()));
         let (tx, rx) = channel();
         let (st, c) = (status.clone(), ctx.clone());
         std::thread::spawn(move || {
@@ -354,7 +351,7 @@ impl App {
         self.player.previous = None;
         self.deck = Some(deck);
         self.note(format!(
-            "{} geladen – {} Folien",
+            "{} loaded – {} slides",
             path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -365,7 +362,7 @@ impl App {
     fn pick_file(&mut self, ctx: &egui::Context) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter(
-                "Präsentationen",
+                "Presentations",
                 &["pptx", "ppt", "odp", "key", "pdf", "lantern"],
             )
             .pick_file()
@@ -381,7 +378,7 @@ impl App {
         if let Some(f) = &self.show_file {
             match self.show.save(f) {
                 Ok(()) => self.saved = Some(self.show.clone()),
-                Err(e) => self.note(format!("Speichern fehlgeschlagen: {e}")),
+                Err(e) => self.note(format!("Saving failed: {e}")),
             }
         }
     }
@@ -768,21 +765,21 @@ impl App {
                     .unwrap_or_default();
                 ui.add(egui::Label::new(RichText::new(name).strong()).truncate());
                 if !self.slides.is_empty() {
-                    ui.label(RichText::new(format!("{} Folien", self.slides.len())).color(MUTED));
+                    ui.label(RichText::new(format!("{} slides", self.slides.len())).color(MUTED));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
-                    .add(flat_button("Einstellungen"))
-                    .on_hover_text("Ausgänge, Timecode, Netzwerk (Strg/Cmd+,)")
+                    .add(flat_button("Settings"))
+                    .on_hover_text("Outputs, timecode, network (Ctrl/Cmd+,)")
                     .clicked()
                 {
                     self.settings_open = !self.settings_open;
                 }
                 if !self.live()
                     && ui
-                        .add(flat_button("Öffnen"))
-                        .on_hover_text("PowerPoint, Keynote, OpenDocument oder PDF (Strg/Cmd+O)")
+                        .add(flat_button("Open"))
+                        .on_hover_text("PowerPoint, Keynote, OpenDocument or PDF (Ctrl/Cmd+O)")
                         .clicked()
                 {
                     self.pick_file(&ctx);
@@ -802,19 +799,19 @@ impl App {
                     status(ui, "NDI", if ok { OK } else { DANGER }).on_hover_text(
                         self.ndi_error
                             .clone()
-                            .unwrap_or_else(|| format!("Sendet als „{}“", self.ndi_name())),
+                            .unwrap_or_else(|| format!("Sending as \"{}\"", self.ndi_name())),
                     );
                 }
                 match self.show.output.display {
                     Some(d) if d < self.displays.len() => {
-                        status(ui, &format!("Bildschirm {}", d + 1), OK);
+                        status(ui, &format!("Display {}", d + 1), OK);
                     }
                     Some(d) => {
-                        status(ui, &format!("Bildschirm {} fehlt", d + 1), DANGER);
+                        status(ui, &format!("Display {} missing", d + 1), DANGER);
                     }
                     None if !self.show.output.ndi => {
-                        let r = status(ui, "Kein Ausgang", MUTED)
-                            .on_hover_text("Klicken: einen Bildschirm oder NDI als Ausgang wählen");
+                        let r = status(ui, "No output", MUTED)
+                            .on_hover_text("Click: choose a display or NDI as output");
                         if r.clicked() {
                             self.settings_open = true;
                             self.settings_tab = SettingsTab::Output;
@@ -932,7 +929,7 @@ impl App {
                     let tx = thumb.right() + 10.0;
                     let width = (rect.right() - tx - 8.0).max(20.0);
                     let title = if s.title.is_empty() {
-                        format!("Folie {}", s.number)
+                        format!("Slide {}", s.number)
                     } else {
                         s.title.clone()
                     };
@@ -954,7 +951,7 @@ impl App {
                         Some(Trigger::Timecode) => {
                             let tc = cfg.map(|c| c.tc.as_str()).unwrap_or("");
                             (
-                                format!("TC {}", if tc.is_empty() { "fehlt" } else { tc }),
+                                format!("TC {}", if tc.is_empty() { "missing" } else { tc }),
                                 TC,
                             )
                         }
@@ -974,7 +971,7 @@ impl App {
                         p.text(
                             pos2(x, y),
                             egui::Align2::LEFT_TOP,
-                            "Notiz",
+                            "Note",
                             egui::FontId::proportional(11.5),
                             MUTED,
                         );
@@ -1030,8 +1027,8 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("LIVE").small().strong().color(CURRENT));
                     let what = match self.player.current {
-                        Some(c) => format!("Folie {} von {total}", c + 1),
-                        None => "Schwarz".into(),
+                        Some(c) => format!("Slide {} of {total}", c + 1),
+                        None => "Black".into(),
                     };
                     ui.label(RichText::new(what).small().color(MUTED));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1043,7 +1040,7 @@ impl App {
                                     .monospace()
                                     .color(MUTED),
                             )
-                            .on_hover_text("Zeit auf dieser Folie");
+                            .on_hover_text("Time on this slide");
                         }
                     });
                 });
@@ -1087,7 +1084,7 @@ impl App {
                     ui.label(RichText::new("NEXT").small().strong().color(NEXT));
                     if let Some(n) = next {
                         ui.label(
-                            RichText::new(format!("Folie {}", n + 1))
+                            RichText::new(format!("Slide {}", n + 1))
                                 .small()
                                 .color(MUTED),
                         );
@@ -1102,7 +1099,7 @@ impl App {
                     ui.painter().text(
                         r.center(),
                         egui::Align2::CENTER_CENTER,
-                        "Ende",
+                        "End",
                         egui::FontId::proportional(18.0),
                         MUTED,
                     );
@@ -1119,9 +1116,9 @@ impl App {
                     }
                     let cfg = self.show.slides.get(n);
                     let t = match cfg.map(|c| c.trigger).unwrap_or_default() {
-                        Trigger::Go => "kommt mit GO".to_string(),
+                        Trigger::Go => "comes with GO".to_string(),
                         Trigger::Timecode => {
-                            format!("kommt bei TC {}", cfg.map(|s| s.tc.as_str()).unwrap_or(""))
+                            format!("comes at TC {}", cfg.map(|s| s.tc.as_str()).unwrap_or(""))
                         }
                     };
                     ui.label(RichText::new(t).small().color(MUTED));
@@ -1163,21 +1160,21 @@ impl App {
                 r.right_center() - Vec2::new(16.0, 0.0),
                 egui::Align2::RIGHT_CENTER,
                 match next {
-                    Some(n) => format!("Folie {}", n + 1),
-                    None => "Ende".into(),
+                    Some(n) => format!("Slide {}", n + 1),
+                    None => "End".into(),
                 },
                 egui::FontId::proportional(14.0),
                 ink,
             );
             if go
-                .on_hover_text("Leertaste, Pfeil rechts, Bild ab oder Klicker")
+                .on_hover_text("Space, right arrow, Page Down or clicker")
                 .clicked()
             {
                 self.go();
             }
             if ui
-                .add(tool_button("Zurück", None, h))
-                .on_hover_text("Pfeil links, Bild auf")
+                .add(tool_button("Back", None, h))
+                .on_hover_text("Left arrow, Page Up")
                 .clicked()
             {
                 self.back();
@@ -1185,14 +1182,14 @@ impl App {
             let bo = self.player.blackout;
             if ui
                 .add(tool_button("Blackout", bo.then_some(DANGER), h))
-                .on_hover_text("Taste B")
+                .on_hover_text("Key B")
                 .clicked()
             {
                 self.player.set_blackout(!bo);
             }
             if ui
-                .add(tool_button("Leeren", None, h))
-                .on_hover_text("Zurück auf Schwarz vor der ersten Folie")
+                .add(tool_button("Clear", None, h))
+                .on_hover_text("Back to black before the first slide")
                 .clicked()
             {
                 self.goto(None);
@@ -1213,11 +1210,11 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.set_min_height((ui.available_height() - 28.0).max(40.0));
-                ui.label(RichText::new("NOTIZEN").small().strong().color(MUTED));
+                ui.label(RichText::new("NOTES").small().strong().color(MUTED));
                 ui.add_space(4.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if notes.is_empty() {
-                        ui.label(RichText::new("Keine Notizen auf dieser Folie").color(MUTED));
+                        ui.label(RichText::new("No notes on this slide").color(MUTED));
                     } else {
                         ui.label(RichText::new(notes).size(19.0));
                     }
@@ -1250,7 +1247,7 @@ impl App {
         let fit = |i: usize, chars: usize| fit_digits(chars, cells[i].width() - 24.0, digits_h);
         let size = fit(0, 8).min(fit(1, 11)).min(fit(2, 5)).min(fit(3, 7));
 
-        clock_cell(ui, cells[0], "Uhrzeit", &clock(), TEXT, None, size);
+        clock_cell(ui, cells[0], "Time of day", &clock(), TEXT, None, size);
 
         let src = self.show.timecode.source;
         let reading = self.tc.reading();
@@ -1265,8 +1262,8 @@ impl App {
         };
         let free = clock_cell(ui, cells[1], "Timecode", &tc, tc_color, accent, size);
         let (badge_text, badge_color, on) = match (src, reading) {
-            (TcSource::Off, _) => ("AUS".to_string(), MUTED, false),
-            (_, None) => ("KEIN SIGNAL".to_string(), DANGER, true),
+            (TcSource::Off, _) => ("OFF".to_string(), MUTED, false),
+            (_, None) => ("NO SIGNAL".to_string(), DANGER, true),
             (s, Some(r)) => (
                 format!(
                     "{} {}{}",
@@ -1276,7 +1273,7 @@ impl App {
                         "RTP-MIDI"
                     },
                     r.fps.round(),
-                    if r.running { "" } else { " STEHT" }
+                    if r.running { "" } else { " STOPPED" }
                 ),
                 if r.running { OK } else { AMBER },
                 r.running,
@@ -1299,7 +1296,7 @@ impl App {
         clock_cell(
             ui,
             cells[2],
-            "Auf der Folie",
+            "On this slide",
             on_slide.as_deref().unwrap_or("-:--"),
             if on_slide.is_some() { TEXT } else { MUTED },
             None,
@@ -1312,7 +1309,7 @@ impl App {
         clock_cell(
             ui,
             cells[3],
-            "Folie",
+            "Slide",
             &count,
             if self.player.current.is_some() {
                 TEXT
@@ -1341,16 +1338,12 @@ impl App {
             .unwrap_or_default();
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(format!("Folie {}", i + 1))
+                RichText::new(format!("Slide {}", i + 1))
                     .size(17.0)
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(flat_button("Schließen"))
-                    .on_hover_text("Esc")
-                    .clicked()
-                {
+                if ui.add(flat_button("Close")).on_hover_text("Esc").clicked() {
                     self.selected = None;
                 }
             });
@@ -1370,14 +1363,14 @@ impl App {
         }
         ui.add_space(6.0);
         if ui
-            .add(tool_button("Jetzt zeigen", None, 32.0))
-            .on_hover_text("Auch: Doppelklick in der Liste")
+            .add(tool_button("Show now", None, 32.0))
+            .on_hover_text("Also: double-click in the list")
             .clicked()
         {
             self.goto(Some(i));
         }
         let cfg = &mut self.show.slides[i];
-        section(ui, "Auslösen");
+        section(ui, "Trigger");
         segmented(
             ui,
             &mut cfg.trigger,
@@ -1386,7 +1379,7 @@ impl App {
         match cfg.trigger {
             Trigger::Go => {
                 ui.label(
-                    RichText::new("Mit GO-Knopf, Taste, Klicker oder OSC.")
+                    RichText::new("With the GO button, a key, a clicker or OSC.")
                         .small()
                         .color(MUTED),
                 );
@@ -1404,8 +1397,8 @@ impl App {
                     );
                     if let Some(r) = reading {
                         if ui
-                            .button("Aktueller TC")
-                            .on_hover_text("Den gerade laufenden Timecode übernehmen")
+                            .button("Current TC")
+                            .on_hover_text("Take the timecode running right now")
                             .clicked()
                         {
                             cfg.tc = show::format_tc(r.secs, r.fps);
@@ -1414,24 +1407,20 @@ impl App {
                 });
                 if self.show.timecode.source == TcSource::Off {
                     ui.label(
-                        RichText::new("Der Timecode-Eingang ist aus (Einstellungen › Timecode).")
+                        RichText::new("The timecode input is off (Settings › Timecode).")
                             .small()
                             .color(AMBER),
                     );
                 }
             }
         }
-        section(ui, "Übergang");
+        section(ui, "Transition");
         let mut kind = match cfg.transition {
             TransitionCfg::FromFile => 0,
             TransitionCfg::Cut => 1,
             TransitionCfg::Fade(_) => 2,
         };
-        segmented(
-            ui,
-            &mut kind,
-            &[(0, "Wie Datei"), (1, "Schnitt"), (2, "Blende")],
-        );
+        segmented(ui, &mut kind, &[(0, "As in file"), (1, "Cut"), (2, "Fade")]);
         let mut secs = match cfg.transition {
             TransitionCfg::Fade(s) => s,
             _ => 0.7,
@@ -1440,8 +1429,8 @@ impl App {
             0 => {
                 ui.label(
                     RichText::new(match file_t {
-                        Transition::Cut => "In der Datei: Schnitt".to_string(),
-                        Transition::Fade(s) => format!("In der Datei: Blende {s:.1} s"),
+                        Transition::Cut => "In the file: cut".to_string(),
+                        Transition::Fade(s) => format!("In the file: fade {s:.1} s"),
                     })
                     .small()
                     .color(MUTED),
@@ -1467,14 +1456,14 @@ impl App {
             .map(|s| s.notes.clone())
             .unwrap_or_default();
         if !notes.is_empty() {
-            section(ui, "Notizen");
+            section(ui, "Notes");
             ui.label(RichText::new(notes).color(MUTED));
         }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.settings_open;
-        egui::Window::new("Einstellungen")
+        egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -1488,10 +1477,10 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     for (t, label) in [
-                        (SettingsTab::Output, "Ausgang"),
+                        (SettingsTab::Output, "Output"),
                         (SettingsTab::Timecode, "Timecode"),
-                        (SettingsTab::Network, "Netzwerk"),
-                        (SettingsTab::Program, "Programm"),
+                        (SettingsTab::Network, "Network"),
+                        (SettingsTab::Program, "Program"),
                     ] {
                         let on = self.settings_tab == t;
                         if ui
@@ -1517,7 +1506,7 @@ impl App {
                 if live {
                     ui.label(
                         RichText::new(
-                            "Live: nur ansehen. Zum Ändern auf „Bearbeiten“ wechseln (Strg/Cmd+E).",
+                            "Live: view only. Switch to Edit to change anything (Ctrl/Cmd+E).",
                         )
                         .color(MODE_LIVE),
                     );
@@ -1540,7 +1529,7 @@ impl App {
     fn settings_output(&mut self, ui: &mut egui::Ui) {
         let o = &mut self.show.output;
         let label = |d: Option<usize>, ds: &[Disp]| match d {
-            None => "Aus".to_string(),
+            None => "Off".to_string(),
             Some(i) => match ds.get(i) {
                 Some(x) => format!(
                     "{} – {} ({}×{}){}",
@@ -1548,21 +1537,21 @@ impl App {
                     x.name,
                     x.px[0],
                     x.px[1],
-                    if x.here { " · hier ist Lantern" } else { "" }
+                    if x.here { " · Lantern is here" } else { "" }
                 ),
-                None => format!("{} (nicht angeschlossen)", i + 1),
+                None => format!("{} (not connected)", i + 1),
             },
         };
         egui::Grid::new("out")
             .num_columns(2)
             .spacing([14.0, 10.0])
             .show(ui, |ui| {
-                ui.label(RichText::new("Bildschirm").color(MUTED));
+                ui.label(RichText::new("Display").color(MUTED));
                 egui::ComboBox::from_id_salt("display")
                     .width(320.0)
                     .selected_text(label(o.display, &self.displays))
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut o.display, None, "Aus");
+                        ui.selectable_value(&mut o.display, None, "Off");
                         for i in 0..self.displays.len() {
                             ui.selectable_value(
                                 &mut o.display,
@@ -1572,7 +1561,7 @@ impl App {
                         }
                     });
                 ui.end_row();
-                ui.label(RichText::new("Auflösung").color(MUTED));
+                ui.label(RichText::new("Resolution").color(MUTED));
                 egui::ComboBox::from_id_salt("res")
                     .width(320.0)
                     .selected_text(o.resolution.label())
@@ -1584,7 +1573,7 @@ impl App {
                 ui.end_row();
                 ui.label(RichText::new("NDI").color(MUTED));
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut o.ndi, "senden als");
+                    ui.checkbox(&mut o.ndi, "send as");
                     ui.add_enabled(
                         o.ndi,
                         egui::TextEdit::singleline(&mut o.ndi_name)
@@ -1594,7 +1583,7 @@ impl App {
                 });
                 ui.end_row();
                 if o.ndi {
-                    ui.label(RichText::new("Bilder/s").color(MUTED));
+                    ui.label(RichText::new("Frames/s").color(MUTED));
                     segmented(
                         ui,
                         &mut o.fps,
@@ -1608,19 +1597,22 @@ impl App {
             if let Some(e) = &self.ndi_error {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(e).color(DANGER));
-                    ui.hyperlink_to("NDI Tools laden", ndi::WEBSITE);
+                    ui.hyperlink_to("Get NDI Tools", ndi::WEBSITE);
                 });
             } else if self.ndi.is_some() {
                 let (w, h) = self.output_size();
                 ui.label(
-                    RichText::new(format!("NDI-Quelle „{}“ sendet {w}×{h}", self.ndi_name()))
-                        .color(OK),
+                    RichText::new(format!(
+                        "NDI source \"{}\" sending {w}×{h}",
+                        self.ndi_name()
+                    ))
+                    .color(OK),
                 );
             }
         }
         ui.add_space(6.0);
         ui.label(
-            RichText::new("Der Ausgang zeigt nur die Folien – keine Symbole, kein Mauszeiger.")
+            RichText::new("The output shows only the slides – no symbols, no mouse pointer.")
                 .small()
                 .color(MUTED),
         );
@@ -1632,9 +1624,9 @@ impl App {
             ui,
             &mut t.source,
             &[
-                (TcSource::Off, "Aus"),
+                (TcSource::Off, "Off"),
                 (TcSource::Ltc, "LTC (Audio)"),
-                (TcSource::RtpMidi, "MIDI-Timecode (Netzwerk)"),
+                (TcSource::RtpMidi, "MIDI timecode (network)"),
             ],
         );
         ui.add_space(8.0);
@@ -1642,7 +1634,7 @@ impl App {
             TcSource::Off => {
                 ui.label(
                     RichText::new(
-                        "Ohne Timecode laufen alle Folien mit GO. Folien mit Timecode-Auslöser warten.",
+                        "Without timecode all slides run with GO. Slides triggered by timecode wait.",
                     )
                     .color(MUTED),
                 );
@@ -1652,9 +1644,9 @@ impl App {
                     .num_columns(2)
                     .spacing([14.0, 10.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Eingang").color(MUTED));
+                        ui.label(RichText::new("Input").color(MUTED));
                         let shown = if t.ltc_device.is_empty() {
-                            "Standard".to_string()
+                            "Default".to_string()
                         } else {
                             t.ltc_device.clone()
                         };
@@ -1662,18 +1654,18 @@ impl App {
                             .width(300.0)
                             .selected_text(shown)
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut t.ltc_device, String::new(), "Standard");
+                                ui.selectable_value(&mut t.ltc_device, String::new(), "Default");
                                 for d in timecode::audio_inputs() {
                                     ui.selectable_value(&mut t.ltc_device, d.clone(), d);
                                 }
                             });
                         ui.end_row();
-                        ui.label(RichText::new("Kanal").color(MUTED));
+                        ui.label(RichText::new("Channel").color(MUTED));
                         let mut ch = t.ltc_channel + 1;
                         ui.add(egui::DragValue::new(&mut ch).range(1..=64));
                         t.ltc_channel = ch - 1;
                         ui.end_row();
-                        ui.label(RichText::new("Pegel").color(MUTED));
+                        ui.label(RichText::new("Level").color(MUTED));
                         let l = self.tc.level();
                         ui.add(egui::ProgressBar::new(l.min(1.0)).desired_width(220.0));
                         ui.end_row();
@@ -1696,15 +1688,13 @@ impl App {
                 if peers.is_empty() {
                     ui.label(
                         RichText::new(format!(
-                            "Noch nicht verbunden. In Show Master unter MIDI die Session „{}“ verbinden – oder hier eine wählen:",
+                            "Not connected yet. In Show Master, connect the session \"{}\" under MIDI – or pick one here:",
                             t.rtp_name
                         ))
                         .color(MUTED),
                     );
                 } else {
-                    ui.label(
-                        RichText::new(format!("Verbunden mit {}", peers.join(", "))).color(OK),
-                    );
+                    ui.label(RichText::new(format!("Connected to {}", peers.join(", "))).color(OK));
                 }
                 let mut connect: Option<String> = None;
                 for (name, addr) in self.net.rtp_sessions() {
@@ -1714,7 +1704,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(&name);
                         ui.label(RichText::new(&addr).small().color(MUTED));
-                        if !peers.contains(&name) && ui.small_button("Verbinden").clicked() {
+                        if !peers.contains(&name) && ui.small_button("Connect").clicked() {
                             connect = Some(addr.clone());
                         }
                     });
@@ -1736,33 +1726,33 @@ impl App {
         ui.label(RichText::new("Show Master").strong());
         ui.label(
             RichText::new(format!(
-                "Show Master findet diesen Rechner im Netz als „{}“: Lantern-Cue › Network.",
+                "Show Master finds this computer on the network as \"{}\": Lantern cue › Network.",
                 self.net.name()
             ))
             .color(MUTED),
         );
         if let Some(ip) = local_ip() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("IP-Adresse").color(MUTED));
+                ui.label(RichText::new("IP address").color(MUTED));
                 ui.label(RichText::new(ip).monospace());
             });
         }
         if let Some(p) = self.net.problem() {
             ui.label(
                 RichText::new(format!(
-                    "Netzwerk-Suche gestört: {p} – dann die IP-Adresse eintragen."
+                    "Network discovery disturbed: {p} – enter the IP address instead."
                 ))
                 .small()
                 .color(AMBER),
             );
         }
-        section(ui, "Fernsteuerung (OSC)");
+        section(ui, "Remote control (OSC)");
         ui.horizontal(|ui| {
-            ui.label(RichText::new("UDP-Port").color(MUTED));
+            ui.label(RichText::new("UDP port").color(MUTED));
             ui.add(egui::DragValue::new(&mut self.show.osc_port).range(1024..=65000));
             match (&self.osc, &self.osc_error) {
                 (Some(_), _) => {
-                    ui.label(RichText::new("empfängt").color(OK));
+                    ui.label(RichText::new("receiving").color(OK));
                 }
                 (None, Some((_, e))) => {
                     ui.label(RichText::new(e).color(DANGER));
@@ -1776,15 +1766,12 @@ impl App {
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 for (a, what) in [
-                    ("/lantern/go", "nächste Folie"),
-                    ("/lantern/back", "vorige Folie"),
-                    ("/lantern/slide <n>", "Folie n zeigen"),
-                    ("/lantern/first", "erste Folie"),
-                    (
-                        "/lantern/blackout [0|1]",
-                        "Blackout (ohne Wert: umschalten)",
-                    ),
-                    ("/lantern/clear", "Schwarz vor der ersten Folie"),
+                    ("/lantern/go", "next slide"),
+                    ("/lantern/back", "previous slide"),
+                    ("/lantern/slide <n>", "show slide n"),
+                    ("/lantern/first", "first slide"),
+                    ("/lantern/blackout [0|1]", "blackout (no value: toggle)"),
+                    ("/lantern/clear", "black before the first slide"),
                 ] {
                     ui.label(RichText::new(a).small().monospace());
                     ui.label(RichText::new(what).small().color(MUTED));
@@ -1798,7 +1785,7 @@ impl App {
         match &self.office_found {
             Some(p) => {
                 ui.label(
-                    RichText::new("Installiert – PowerPoint-Dateien werden damit umgewandelt.")
+                    RichText::new("Installed – PowerPoint files are converted with it.")
                         .color(MUTED),
                 );
                 ui.label(RichText::new(p.display().to_string()).small().color(MUTED));
@@ -1806,18 +1793,18 @@ impl App {
             None => {
                 ui.label(
                     RichText::new(
-                        "Nicht installiert – nötig für PowerPoint-Dateien (PDFs gehen auch so).",
+                        "Not installed – needed for PowerPoint files (PDFs work without it).",
                     )
                     .color(AMBER),
                 );
             }
         }
-        section(ui, "Präsentation");
+        section(ui, "Presentation");
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.deck.is_some(), egui::Button::new("Neu einlesen"))
-                .on_hover_text("Strg/Cmd+R")
+                .add_enabled(self.deck.is_some(), egui::Button::new("Reload"))
+                .on_hover_text("Ctrl/Cmd+R")
                 .clicked()
             {
                 self.load(&ctx);
@@ -1825,7 +1812,7 @@ impl App {
             if let Some(f) = &self.show_file {
                 ui.label(
                     RichText::new(format!(
-                        "Einstellungen gespeichert in {}",
+                        "Settings saved in {}",
                         f.file_name()
                             .map(|n| n.to_string_lossy())
                             .unwrap_or_default()
@@ -1835,18 +1822,18 @@ impl App {
                 );
             }
         });
-        section(ui, "Tasten");
+        section(ui, "Keys");
         egui::Grid::new("keys")
             .num_columns(2)
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 for (k, what) in [
-                    ("Leertaste · → · Bild ab · Enter", "GO"),
-                    ("← · Bild auf · Rücktaste", "Zurück"),
+                    ("Space · → · Page Down · Enter", "GO"),
+                    ("← · Page Up · Backspace", "Back"),
                     ("B", "Blackout"),
-                    ("Pos1", "Erste Folie"),
-                    ("Esc", "Folien-Einstellungen schließen"),
-                    ("Strg/Cmd+E", "Bearbeiten / Live umschalten"),
+                    ("Home", "First slide"),
+                    ("Esc", "Close the slide settings"),
+                    ("Ctrl/Cmd+E", "Switch between Edit and Live"),
                 ] {
                     ui.label(RichText::new(k).small());
                     ui.label(RichText::new(what).small().color(MUTED));
@@ -1868,8 +1855,12 @@ impl App {
         if self.office_found.is_none() {
             let st = self.install.lock().map(|s| s.clone()).unwrap_or_default();
             banner(ui, AMBER, |ui| {
-                ui.label(RichText::new("LibreOffice fehlt").strong().color(AMBER));
-                ui.label("– nötig, um PowerPoint-Dateien originalgetreu zu öffnen.");
+                ui.label(
+                    RichText::new("LibreOffice is missing")
+                        .strong()
+                        .color(AMBER),
+                );
+                ui.label("– needed to open PowerPoint files exactly as they look.");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if st.running {
                         match st.progress {
@@ -1889,9 +1880,7 @@ impl App {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    RichText::new("Jetzt installieren")
-                                        .strong()
-                                        .color(Color32::BLACK),
+                                    RichText::new("Install now").strong().color(Color32::BLACK),
                                 )
                                 .fill(AMBER),
                             )
@@ -1899,7 +1888,7 @@ impl App {
                         {
                             office::install(self.install.clone());
                         }
-                        if ui.link("Download-Seite").clicked() {
+                        if ui.link("Download page").clicked() {
                             office::open_url(office::DOWNLOAD_PAGE);
                         }
                         if let Some(e) = &st.error {
@@ -1913,15 +1902,15 @@ impl App {
         }
         if self.changed_on_disk && self.loading.is_none() {
             banner(ui, TC, |ui| {
-                ui.label("Die Präsentation wurde geändert.");
+                ui.label("The presentation has changed.");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.live() {
                         ui.label(
-                            RichText::new("Neu einlesen geht im Modus „Bearbeiten“")
+                            RichText::new("Reload works in Edit mode")
                                 .small()
                                 .color(MUTED),
                         );
-                    } else if ui.button("Neu einlesen").clicked() {
+                    } else if ui.button("Reload").clicked() {
                         self.load(&ctx);
                     }
                 });
@@ -1975,7 +1964,7 @@ impl App {
             ui.add_space(ui.available_height() * 0.28);
             ui.label(RichText::new("Lantern").size(38.0).strong().color(AMBER));
             ui.label(
-                RichText::new("Präsentationen für die Bühne")
+                RichText::new("Presentations for the stage")
                     .size(15.0)
                     .color(MUTED),
             );
@@ -1996,7 +1985,7 @@ impl App {
             if ui
                 .add(
                     egui::Button::new(
-                        RichText::new("Präsentation öffnen")
+                        RichText::new("Open presentation")
                             .size(17.0)
                             .strong()
                             .color(Color32::BLACK),
@@ -2011,8 +2000,7 @@ impl App {
             }
             ui.add_space(10.0);
             ui.label(
-                RichText::new("oder eine Datei hierher ziehen  ·  PowerPoint, Keynote, PDF")
-                    .color(MUTED),
+                RichText::new("or drop a file here  ·  PowerPoint, Keynote, PDF").color(MUTED),
             );
         });
     }
@@ -2189,26 +2177,25 @@ fn badge(
 
 /// A quiet button for the top bar and panel headers.
 fn flat_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text.to_string()).color(TEXT))
-        .fill(CARD)
-        .stroke(Stroke::NONE)
-        .corner_radius(6)
+    egui::Button::new(RichText::new(text.to_string()).color(TEXT)).corner_radius(6)
 }
 
 /// A large transport button; `on` paints it in that colour.
 fn tool_button(text: &str, on: Option<Color32>, h: f32) -> egui::Button<'static> {
-    egui::Button::new(
+    let b = egui::Button::new(
         RichText::new(text.to_string())
             .size(15.0)
             .color(if on.is_some() { Color32::WHITE } else { TEXT }),
     )
-    .fill(on.unwrap_or(CARD))
-    .stroke(Stroke::NONE)
     .corner_radius(8)
-    .min_size(Vec2::new(104.0, h))
+    .min_size(Vec2::new(104.0, h));
+    match on {
+        Some(c) => b.fill(c),
+        None => b,
+    }
 }
 
-/// Bearbeiten | Live. Live is painted green so it is clear the show is locked.
+/// Edit | Live, coloured like Show Master: Live red, Edit blue.
 fn mode_switch(ui: &mut egui::Ui, live: &mut bool) {
     // A scope keeps the top bar's centred layout, so the pills line up with
     // the other buttons.
@@ -2220,13 +2207,13 @@ fn mode_switch(ui: &mut egui::Ui, live: &mut bool) {
                 true,
                 "Live",
                 MODE_LIVE,
-                "Show läuft: Folien-Einstellungen, Öffnen und Einstellungen gesperrt (Strg/Cmd+E)",
+                "The show is running: slide settings, opening and settings are locked (Ctrl/Cmd+E)",
             ),
             (
                 false,
-                "Bearbeiten",
+                "Edit",
                 MODE_EDIT,
-                "Folien, Ausgänge und Timecode einrichten (Strg/Cmd+E)",
+                "Set up slides, outputs and timecode (Ctrl/Cmd+E)",
             ),
         ] {
             let on = *live == v;
@@ -2235,9 +2222,8 @@ fn mode_switch(ui: &mut egui::Ui, live: &mut bool) {
             } else {
                 MUTED
             }))
-            .fill(if on { on_fill } else { CARD })
-            .stroke(Stroke::NONE)
             .corner_radius(6);
+            let b = if on { b.fill(on_fill) } else { b };
             if ui.add(b).on_hover_text(tip).clicked() {
                 *live = v;
             }
@@ -2256,9 +2242,8 @@ fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(
             } else {
                 TEXT
             }))
-            .fill(if on { AMBER } else { CARD })
-            .stroke(Stroke::NONE)
             .corner_radius(6);
+            let b = if on { b.fill(AMBER) } else { b };
             if ui.add(b).clicked() {
                 *value = *v;
             }
@@ -2301,19 +2286,20 @@ fn style(ctx: &egui::Context) {
     v.panel_fill = BG;
     v.window_fill = PANEL;
     v.override_text_color = Some(TEXT);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(36, 40, 49);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(48, 53, 64);
-    v.widgets.active.weak_bg_fill = Color32::from_rgb(58, 64, 77);
+    v.widgets.inactive.weak_bg_fill = CARD;
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(42, 46, 56);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(54, 59, 71);
     v.selection.bg_fill = Color32::from_rgb(120, 86, 20);
-    // Buttons keep their size on hover and press: nothing moves.
+    // Buttons keep their size on hover and press: no outline appears (egui
+    // makes room for it by shrinking the inside), hover only lightens the fill.
     for w in [
-        &mut v.widgets.noninteractive,
         &mut v.widgets.inactive,
         &mut v.widgets.hovered,
         &mut v.widgets.active,
         &mut v.widgets.open,
     ] {
         w.expansion = 0.0;
+        w.bg_stroke = Stroke::NONE;
     }
     ctx.set_visuals(v);
     let mut s = (*ctx.global_style()).clone();
@@ -2340,7 +2326,7 @@ impl eframe::App for App {
                         let (size, pos, scale) =
                             (m.size(), m.position(), m.scale_factor().max(0.1) as f32);
                         Disp {
-                            name: m.name().unwrap_or_else(|| "Bildschirm".into()),
+                            name: m.name().unwrap_or_else(|| "Display".into()),
                             pos: [pos.x as f32 / scale, pos.y as f32 / scale],
                             size: [size.width as f32 / scale, size.height as f32 / scale],
                             px: [size.width, size.height],

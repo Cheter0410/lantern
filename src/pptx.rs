@@ -165,11 +165,11 @@ fn transition(doc: &roxmltree::Document) -> Transition {
 pub fn read(path: &Path) -> Result<Info, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut zip =
-        Zip(zip::ZipArchive::new(file).map_err(|_| "Keine PowerPoint-Datei (.pptx)".to_string())?);
+        Zip(zip::ZipArchive::new(file).map_err(|_| "Not a PowerPoint file (.pptx)".to_string())?);
     let pres = "ppt/presentation.xml";
     let xml = zip
         .text(pres)
-        .ok_or("Keine PowerPoint-Datei (ppt/presentation.xml fehlt)")?;
+        .ok_or("Not a PowerPoint file (ppt/presentation.xml is missing)")?;
     let doc = roxmltree::Document::parse(&xml).map_err(|e| format!("presentation.xml: {e}"))?;
     let size = doc
         .descendants()
@@ -240,7 +240,7 @@ pub fn read(path: &Path) -> Result<Info, String> {
         });
     }
     if slides.is_empty() {
-        return Err("Die Präsentation enthält keine Folien.".into());
+        return Err("The presentation has no slides.".into());
     }
     Ok(Info { size, slides })
 }

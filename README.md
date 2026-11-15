@@ -18,7 +18,7 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
   `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`.
 - **On another computer:** Lantern announces itself on the network (Bonjour, `_lantern._udp`); in
-  Show Master the Lantern cue lists it under *Network*. Settings › Netzwerk shows the name and the IP
+  Show Master the Lantern cue lists it under *Network*. Settings › Network shows the name and the IP
   address. Timecode comes over the network too (RTP-MIDI), or as LTC by cable.
 - The settings of a presentation are kept next to it (`talk.pptx` → `talk.lantern`); a changed
   presentation is noticed and can be reloaded without losing them.

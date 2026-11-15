@@ -81,6 +81,33 @@ fn click_at(h: &Harness<'_, App>, pos: egui::Pos2) {
     }
 }
 
+impl Shots {
+    /// With pictures on: the box of pixels around `r` that differ from the
+    /// background just outside it (the button as painted).
+    fn painted(&self, h: &mut Harness<'_, App>, r: egui::Rect) -> Option<[u32; 4]> {
+        self.0.as_ref()?;
+        let img = h.render().ok()?;
+        let ppp = img.width() as f32 / 1400.0;
+        let px = |x: f32| (x * ppp).round() as u32;
+        let (x0, y0, x1, y1) = (
+            px(r.left() - 4.0),
+            px(r.top() - 4.0),
+            px(r.right() + 4.0),
+            px(r.bottom() + 4.0),
+        );
+        let bg = *img.get_pixel(x0, y0);
+        let mut b = [u32::MAX, u32::MAX, 0, 0];
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if *img.get_pixel(x, y) != bg {
+                    b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                }
+            }
+        }
+        Some(b)
+    }
+}
+
 fn run_until(h: &mut Harness<'_, App>, what: &str, done: impl Fn(&App) -> bool) {
     let start = Instant::now();
     while !done(h.state()) {
@@ -121,22 +148,22 @@ fn live_mode_locks_the_show() {
         a.slides.len() == 3 && a.thumbs.len() == 3
     });
     assert!(!h.state().live(), "starts in Edit");
-    assert!(h.query_by_label("Öffnen").is_some());
+    assert!(h.query_by_label("Open").is_some());
 
     // Edit: clicking a slide opens its settings.
     click_at(&h, egui::pos2(150.0, 80.0));
     h.run_steps(3);
     assert_eq!(h.state().selected, Some(0), "slide settings open in Edit");
-    assert!(h.query_by_label("Jetzt zeigen").is_some());
+    assert!(h.query_by_label("Show now").is_some());
     shots.take(&mut h, "1-edit-slide-settings");
 
-    // Switch to Live with the button: settings close, Öffnen is gone.
+    // Switch to Live with the button: settings close, Open is gone.
     h.get_by_label("Live").click();
     h.run_steps(3);
     assert!(h.state().live());
     assert_eq!(h.state().selected, None, "Live closes the slide settings");
-    assert!(h.query_by_label("Jetzt zeigen").is_none());
-    assert!(h.query_by_label("Öffnen").is_none());
+    assert!(h.query_by_label("Show now").is_none());
+    assert!(h.query_by_label("Open").is_none());
     shots.take(&mut h, "2-live");
 
     // Live: clicking a slide does not open its settings, the show still runs.
@@ -149,12 +176,23 @@ fn live_mode_locks_the_show() {
     run_until(&mut h, "the live and next pictures", |a| {
         a.fulls.contains_key(&0) && a.fulls.contains_key(&1)
     });
-    // Hovering a button must not make it grow (nothing moves).
-    h.get_by_label("Einstellungen").hover();
+    // Hovering a button must not change its size (nothing moves).
+    let button = h.get_by_label("Settings").rect();
+    let before = shots.painted(&mut h, button);
+    // Pointer in the top left corner, so the painted cursor stays inside.
+    h.event(egui::Event::PointerMoved(
+        button.left_top() + egui::vec2(2.0, 2.0),
+    ));
     h.run_steps(3);
+    let after = shots.painted(&mut h, button);
+    assert_eq!(before, after, "the painted button keeps its size on hover");
     let v = h.ctx.global_style().visuals.clone();
     for w in [&v.widgets.hovered, &v.widgets.active, &v.widgets.inactive] {
         assert_eq!(w.expansion, 0.0, "buttons keep their size");
+        assert_eq!(
+            w.bg_stroke.width, 0.0,
+            "no hover outline that shrinks the inside"
+        );
     }
     shots.take(&mut h, "2b-live-running-hover");
 
@@ -162,7 +200,7 @@ fn live_mode_locks_the_show() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
     h.run_steps(3);
     assert!(h.state().settings_open);
-    assert!(h.query_by_label_contains("nur ansehen").is_some());
+    assert!(h.query_by_label_contains("view only").is_some());
     shots.take(&mut h, "3-live-settings");
     h.key_press(Key::Escape);
     h.run_steps(3);
@@ -177,7 +215,7 @@ fn live_mode_locks_the_show() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::E);
     h.run_steps(3);
     assert!(!h.state().live());
-    assert!(h.query_by_label("Öffnen").is_some());
+    assert!(h.query_by_label("Open").is_some());
     shots.take(&mut h, "4-edit-again");
 
     let _ = std::fs::remove_dir_all(&dir);

@@ -52,7 +52,7 @@ impl Default for Input {
         Input {
             cfg: TcSettings::default(),
             latest: Arc::default(),
-            status: Arc::new(Mutex::new("Aus".into())),
+            status: Arc::new(Mutex::new("Off".into())),
             _stream: None,
             rtp: None,
             level: Arc::default(),
@@ -85,7 +85,7 @@ impl Input {
             *l = Latest::default();
         }
         let r = match cfg.source {
-            TcSource::Off => Ok("Aus".to_string()),
+            TcSource::Off => Ok("Off".to_string()),
             TcSource::Ltc => self.start_ltc(),
             TcSource::RtpMidi => self.start_rtp(),
         };
@@ -144,10 +144,10 @@ impl Input {
     pub fn connect(&self, addr: &str) -> Result<(), String> {
         let a: std::net::SocketAddr = addr
             .parse()
-            .map_err(|_| format!("Adresse {addr} ist ungültig"))?;
+            .map_err(|_| format!("Address {addr} is not valid"))?;
         self.rtp
             .as_ref()
-            .ok_or("RTP-MIDI ist aus")?
+            .ok_or("RTP-MIDI is off")?
             .connect(a)
             .map_err(|e| e.to_string())
     }
@@ -193,7 +193,7 @@ impl Input {
         let port = session.local_addr().port();
         self.rtp = Some(session);
         Ok(format!(
-            "RTP-MIDI-Session „{}“ (Port {port}) wartet auf MIDI-Timecode",
+            "RTP-MIDI session \"{}\" (port {port}) is waiting for MIDI timecode",
             self.cfg.rtp_name
         ))
     }
@@ -207,7 +207,7 @@ impl Input {
                 d.find(|d| d.name().ok().as_deref() == Some(self.cfg.ltc_device.as_str()))
             })
         }
-        .ok_or("Audio-Eingang nicht gefunden")?;
+        .ok_or("Audio input not found")?;
         let name = dev.name().unwrap_or_default();
         let config = dev
             .default_input_config()
@@ -281,12 +281,12 @@ impl Input {
                 err,
                 None,
             ),
-            f => return Err(format!("{name}: Sample-Format {f} wird nicht unterstützt")),
+            f => return Err(format!("{name}: sample format {f} is not supported")),
         }
         .map_err(|e| format!("{name}: {e}"))?;
         stream.play().map_err(|e| format!("{name}: {e}"))?;
         self._stream = Some(stream);
-        Ok(format!("LTC auf „{name}“, Kanal {}", ch + 1))
+        Ok(format!("LTC on \"{name}\", channel {}", ch + 1))
     }
 }
 

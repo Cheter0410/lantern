@@ -109,7 +109,7 @@ impl Deck {
         let pdf = Pdf::new(pdf_bytes.clone()).map_err(|e| format!("PDF: {e:?}"))?;
         let pages = pdf.pages().len();
         if pages == 0 {
-            return Err("Die umgewandelte Präsentation hat keine Seiten.".into());
+            return Err("The converted presentation has no pages.".into());
         }
         let aspect = pdf
             .pages()

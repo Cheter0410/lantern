@@ -110,7 +110,7 @@ pub fn to_pdf(pptx: &Path, status: &dyn Fn(String)) -> Result<PathBuf, String> {
     if pdf.is_file() {
         return Ok(pdf);
     }
-    let soffice = find().ok_or("LibreOffice ist nicht installiert.")?;
+    let soffice = find().ok_or("LibreOffice is not installed.")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ext = pptx
         .extension()
@@ -128,7 +128,7 @@ pub fn to_pdf(pptx: &Path, status: &dyn Fn(String)) -> Result<PathBuf, String> {
     ];
     let mut last = String::new();
     for filter in filters {
-        status("LibreOffice wandelt die Folien um…".into());
+        status("LibreOffice is converting the slides…".into());
         let mut cmd = Command::new(&soffice);
         cmd.arg(format!("-env:UserInstallation={profile}"))
             .args([
@@ -148,18 +148,18 @@ pub fn to_pdf(pptx: &Path, status: &dyn Fn(String)) -> Result<PathBuf, String> {
         hide_window(&mut cmd);
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("LibreOffice ließ sich nicht starten: {e}"))?;
+            .map_err(|e| format!("LibreOffice could not be started: {e}"))?;
         let start = Instant::now();
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if start.elapsed() > Duration::from_secs(300) => {
                     let _ = child.kill();
-                    return Err("LibreOffice hat nach 5 Minuten nicht fertig umgewandelt.".into());
+                    return Err("LibreOffice did not finish converting within 5 minutes.".into());
                 }
                 Ok(None) => {
                     status(format!(
-                        "LibreOffice wandelt die Folien um… {} s",
+                        "LibreOffice is converting the slides… {} s",
                         start.elapsed().as_secs()
                     ));
                     std::thread::sleep(Duration::from_millis(250));
@@ -176,9 +176,9 @@ pub fn to_pdf(pptx: &Path, status: &dyn Fn(String)) -> Result<PathBuf, String> {
         }
     }
     Err(if last.is_empty() {
-        "LibreOffice konnte die Präsentation nicht umwandeln.".into()
+        "LibreOffice could not convert the presentation.".into()
     } else {
-        format!("LibreOffice konnte die Präsentation nicht umwandeln: {last}")
+        format!("LibreOffice could not convert the presentation: {last}")
     })
 }
 
@@ -224,7 +224,7 @@ pub fn open_url(url: &str) {
 pub fn install(state: InstallState) {
     if let Ok(mut s) = state.lock() {
         *s = Install {
-            text: "Starte…".into(),
+            text: "Starting…".into(),
             running: true,
             ..Default::default()
         };
@@ -251,7 +251,7 @@ pub fn install(state: InstallState) {
 fn install_windows(state: &InstallState) -> Result<String, String> {
     set(
         state,
-        "Installiere LibreOffice über winget (Windows fragt eventuell nach Erlaubnis)…",
+        "Installing LibreOffice with winget (Windows may ask for permission)…",
         None,
     );
     let mut cmd = Command::new("winget");
@@ -266,17 +266,14 @@ fn install_windows(state: &InstallState) -> Result<String, String> {
     ]);
     hide_window(&mut cmd);
     match cmd.status() {
-        Ok(_) if find().is_some() => Ok("LibreOffice ist installiert.".into()),
+        Ok(_) if find().is_some() => Ok("LibreOffice is installed.".into()),
         Ok(s) => Err(format!(
-            "winget konnte LibreOffice nicht installieren ({s}). Die Download-Seite ist geöffnet."
+            "winget could not install LibreOffice ({s}). The download page is open."
         ))
         .inspect_err(|_| open_url(DOWNLOAD_PAGE)),
         Err(_) => {
             open_url(DOWNLOAD_PAGE);
-            Err(
-                "winget fehlt auf diesem Windows. Die Download-Seite von LibreOffice ist geöffnet."
-                    .into(),
-            )
+            Err("winget is missing on this Windows. The LibreOffice download page is open.".into())
         }
     }
 }
@@ -285,11 +282,10 @@ fn install_windows(state: &InstallState) -> Result<String, String> {
 fn latest_version() -> Result<String, String> {
     let page = ureq::get("https://download.documentfoundation.org/libreoffice/stable/")
         .call()
-        .map_err(|e| format!("Download-Server nicht erreichbar: {e}"))?
+        .map_err(|e| format!("Download server not reachable: {e}"))?
         .into_string()
         .map_err(|e| e.to_string())?;
-    newest_in_listing(&page)
-        .ok_or_else(|| "Keine LibreOffice-Version auf dem Server gefunden.".into())
+    newest_in_listing(&page).ok_or_else(|| "No LibreOffice version found on the server.".into())
 }
 
 pub fn newest_in_listing(page: &str) -> Option<String> {
@@ -307,7 +303,7 @@ pub fn newest_in_listing(page: &str) -> Option<String> {
 }
 
 fn install_mac(state: &InstallState) -> Result<String, String> {
-    set(state, "Suche die neueste LibreOffice-Version…", None);
+    set(state, "Looking for the latest LibreOffice version…", None);
     let v = latest_version()?;
     let (dir, file) = if cfg!(target_arch = "aarch64") {
         ("aarch64", "aarch64")
@@ -317,7 +313,7 @@ fn install_mac(state: &InstallState) -> Result<String, String> {
     let url = format!("https://download.documentfoundation.org/libreoffice/stable/{v}/mac/{dir}/LibreOffice_{v}_MacOS_{file}.dmg");
     let resp = ureq::get(&url)
         .call()
-        .map_err(|e| format!("Download fehlgeschlagen: {e}"))?;
+        .map_err(|e| format!("Download failed: {e}"))?;
     let total: u64 = resp
         .header("Content-Length")
         .and_then(|s| s.parse().ok())
@@ -330,7 +326,7 @@ fn install_mac(state: &InstallState) -> Result<String, String> {
     let mut last = Instant::now();
     loop {
         let n = std::io::Read::read(&mut reader, &mut buf)
-            .map_err(|e| format!("Download abgebrochen: {e}"))?;
+            .map_err(|e| format!("Download interrupted: {e}"))?;
         if n == 0 {
             break;
         }
@@ -341,13 +337,13 @@ fn install_mac(state: &InstallState) -> Result<String, String> {
             let p = (total > 0).then(|| done as f32 / total as f32);
             set(
                 state,
-                &format!("Lade LibreOffice {v}… {} MB", done / 1_000_000),
+                &format!("Downloading LibreOffice {v}… {} MB", done / 1_000_000),
                 p,
             );
         }
     }
     drop(out);
-    set(state, "Kopiere LibreOffice in Programme…", None);
+    set(state, "Copying LibreOffice to Applications…", None);
     let mount = std::env::temp_dir().join("lantern-libreoffice-dmg");
     let _ = Command::new("hdiutil")
         .arg("detach")
@@ -368,7 +364,7 @@ fn install_mac(state: &InstallState) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     if !st.status.success() {
         return Err(format!(
-            "Disk-Image ließ sich nicht öffnen: {}",
+            "Could not open the disk image: {}",
             String::from_utf8_lossy(&st.stderr).trim()
         ));
     }
@@ -397,9 +393,9 @@ fn install_mac(state: &InstallState) -> Result<String, String> {
         .output();
     let _ = std::fs::remove_file(&tmp);
     if ok && find().is_some() {
-        Ok(format!("LibreOffice {v} ist installiert."))
+        Ok(format!("LibreOffice {v} is installed."))
     } else {
-        Err("LibreOffice konnte nicht nach Programme kopiert werden.".into())
+        Err("LibreOffice could not be copied to Applications.".into())
     }
 }
 
@@ -421,18 +417,18 @@ pub fn linux_command() -> Option<&'static str> {
 fn install_linux(state: &InstallState) -> Result<String, String> {
     let Some(cmd) = linux_command() else {
         open_url(DOWNLOAD_PAGE);
-        return Err("Unbekannte Paketverwaltung – die Download-Seite ist geöffnet.".into());
+        return Err("Unknown package manager – the download page is open.".into());
     };
-    crate::terminal::open("LibreOffice installieren", cmd)?;
-    set(state, "Im Terminal: Passwort eingeben und bestätigen. Lantern merkt es, sobald LibreOffice da ist.", None);
+    crate::terminal::open("Install LibreOffice", cmd)?;
+    set(state, "In the terminal: enter your password and confirm. Lantern notices as soon as LibreOffice is there.", None);
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(1800) {
         if find().is_some() {
-            return Ok("LibreOffice ist installiert.".into());
+            return Ok("LibreOffice is installed.".into());
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    Err("LibreOffice wurde nicht gefunden.".into())
+    Err("LibreOffice was not found.".into())
 }
 
 #[cfg(test)]
