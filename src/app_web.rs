@@ -55,7 +55,8 @@ impl App {
             return;
         };
         server.set_pin(cfg.pin.trim());
-        let next = self.next_index();
+        let cue = self.next_cue();
+        let next = cue.map(|(n, _)| n);
         let scene = self.stage_scene();
         let pic = |p: Option<usize>| p.and_then(|p| self.fulls.get(&p)).map(|f| &f.image);
         let id = |p: Option<usize>| {
@@ -63,8 +64,9 @@ impl App {
                 .map(|f| Arc::as_ptr(&f.image.rgba) as u64)
         };
         let cur = self.player.current;
-        server.set_pic(Which::Now, id(cur).unwrap_or(0), pic(cur));
-        server.set_pic(Which::Next, id(next).unwrap_or(0), pic(next));
+        let (now_page, next_page) = (self.live_page(), self.cue_page(cue));
+        server.set_pic(Which::Now, id(now_page).unwrap_or(0), pic(now_page));
+        server.set_pic(Which::Next, id(next_page).unwrap_or(0), pic(next_page));
         let starts_video = self.go_starts_video();
         let next_cfg = next.and_then(|n| self.show.slides.get(n));
         let state = serde_json::json!({
@@ -76,19 +78,22 @@ impl App {
             "total": self.slides.len(),
             "next": next.map(|n| n + 1),
             "next_title": next.and_then(|n| self.slides.get(n)).map(|s| s.title.clone()),
-            "next_how": next.map(|_| match next_cfg.map(|c| c.trigger).unwrap_or_default() {
+            "next_how": cue.map(|(_, k)| match next_cfg.map(|c| c.trigger).unwrap_or_default() {
+                _ if k > 0 => format!("{} – comes with GO", self.cue_label((next.unwrap_or(0), k))),
                 Trigger::Go => "comes with GO".to_string(),
                 Trigger::Timecode => format!(
                     "comes at TC {}",
                     next_cfg.map(|c| c.tc.as_str()).unwrap_or("")
                 ),
             }),
-            "pic_now": id(cur),
-            "pic_next": id(next),
-            "can_go": next.is_some() || starts_video,
-            "go_what": match next {
+            "pic_now": id(now_page),
+            "pic_next": id(next_page),
+            "build": cur.filter(|c| self.steps_of(*c) > 0)
+                .map(|c| format!("{}/{}", self.player.step, self.steps_of(c))),
+            "can_go": cue.is_some() || starts_video,
+            "go_what": match cue {
                 _ if starts_video => "Play video".to_string(),
-                Some(n) => format!("Slide {}", n + 1),
+                Some(n) => self.cue_label(n),
                 None => "End".to_string(),
             },
             "blackout": self.player.blackout,

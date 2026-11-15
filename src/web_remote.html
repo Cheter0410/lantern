@@ -191,7 +191,7 @@ function render(s) {
   $("show").textContent = s.show || "";
   $("clock").textContent = s.clock;
   $("live").hidden = !s.live;
-  $("nowLabel").textContent = s.slide ? `Slide ${s.slide} of ${s.total}` : "Black";
+  $("nowLabel").textContent = s.slide ? `Slide ${s.slide} of ${s.total}${s.build ? " · build " + s.build : ""}` : "Black";
   $("nextLabel").textContent = s.next ? `Slide ${s.next}` : "End";
   $("nowEmpty").textContent = s.slide ? "" : "Black";
   $("nextTitle").textContent = s.next_title || "";

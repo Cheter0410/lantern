@@ -9,6 +9,8 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   (those without LibreOffice). If LibreOffice is missing, Lantern installs it with one click.
 - **Live layout:** slide list with thumbnails, LIVE and NEXT, big GO+ and GO− (one slide back), blackout and reset (set apart on the right, in red and amber; on a row of their own in narrow windows), speaker
   notes, time on the slide, clock and timecode.
+- **Builds:** shapes and bullet points that come with a click in PowerPoint come with GO, step by
+  step (with a short fade), before the next slide.
 - **Per slide:** triggered with **GO** (button, clicker, keyboard, OSC, Show Master) or at a
   **timecode keyframe**; transition as in the file, cut, or fade with its own length.
 - **Timecode in:** LTC on any audio input, MIDI timecode (MTC) on a MIDI input of this computer

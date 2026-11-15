@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0
+
+- Builds and animations from PowerPoint: shapes and bullet points that come (or go) with a click
+  now come with GO, one after the other, before the next slide. Lantern reads the click order from
+  the .pptx and lets LibreOffice make a picture of each step; bullets not there yet are invisible,
+  so nothing moves. Effects that start by themselves are shown at once.
+- A step fades in (as long as the effect, at most a second); "Appear" cuts. The motion of fly-ins,
+  zooms and the like is not played.
+- GO+ says "Build 2/4" while there are steps left, NEXT shows the next step, LIVE "Slide 2 of 8 ·
+  build 1/4"; the list marks slides with builds and shows them finished. GO− goes a step back, and
+  to the slide before as it was left (finished).
+- Stage display, web remote and show log know the steps too. Time on the slide keeps counting
+  through the builds.
+
 ## 0.10.0
 
 - Several outputs: Settings › Output › *Also on* sends the same picture to more displays at once –

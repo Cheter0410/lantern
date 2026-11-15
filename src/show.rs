@@ -434,8 +434,14 @@ impl Chase {
 #[derive(Debug)]
 pub struct Player {
     pub current: Option<usize>,
+    /// Build step of the current slide (0: none yet).
+    pub step: usize,
     pub previous: Option<usize>,
+    pub prev_step: usize,
+    /// The picture changed (transition).
     pub since: Instant,
+    /// The slide came (builds don't count).
+    pub on_slide: Instant,
     pub fade: f32,
     pub blackout: bool,
     black_since: Instant,
@@ -449,8 +455,11 @@ impl Default for Player {
     fn default() -> Self {
         Player {
             current: None,
+            step: 0,
             previous: None,
+            prev_step: 0,
             since: Instant::now(),
+            on_slide: Instant::now(),
             fade: 0.0,
             blackout: false,
             black_since: Instant::now(),
@@ -461,11 +470,22 @@ impl Default for Player {
 
 impl Player {
     pub fn show(&mut self, slide: Option<usize>, t: Transition) {
-        if slide == self.current {
+        self.show_at(slide, 0, t);
+    }
+
+    /// A slide at a build step (the same slide: the next or another step).
+    pub fn show_at(&mut self, slide: Option<usize>, step: usize, t: Transition) {
+        let step = if slide.is_some() { step } else { 0 };
+        if slide == self.current && step == self.step {
             return;
         }
+        if slide != self.current {
+            self.on_slide = Instant::now();
+        }
         self.previous = self.current;
+        self.prev_step = self.step;
         self.current = slide;
+        self.step = step;
         self.since = Instant::now();
         self.fade = match t {
             Transition::Cut => 0.0,
@@ -567,6 +587,7 @@ mod tests {
             hidden: false,
             transition: Transition::Cut,
             video: None,
+            builds: Vec::new(),
         };
         let mut show = Show::default();
         show.match_slides(&[info("A"), info("B")]);

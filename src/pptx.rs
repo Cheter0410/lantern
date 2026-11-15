@@ -15,6 +15,8 @@ pub struct SlideInfo {
     pub transition: Transition,
     /// The first video on the slide.
     pub video: Option<VideoInfo>,
+    /// Build steps (one per click): the fade of each in seconds (0: at once).
+    pub builds: Vec<f32>,
 }
 
 /// Where a video's file is.
@@ -77,7 +79,7 @@ impl Zip {
 }
 
 /// `ppt/slides/slide1.xml` -> `ppt/slides/_rels/slide1.xml.rels`
-fn rels_of(part: &str) -> String {
+pub(crate) fn rels_of(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),
@@ -377,6 +379,15 @@ pub fn read(path: &Path) -> Result<Info, String> {
             hidden,
             transition: transition(&sd),
             video: video(&sd, &srels, size),
+            builds: if hidden {
+                Vec::new()
+            } else {
+                crate::builds::parse(&sd)
+                    .clicks
+                    .iter()
+                    .map(|c| c.fade)
+                    .collect()
+            },
         });
     }
     if slides.is_empty() {

@@ -6,7 +6,7 @@ use crate::office::{self, InstallState};
 use crate::osc::{self, Command};
 use crate::pptx::{self, SlideInfo, Transition};
 use crate::show::{self, Chase, Player, Resolution, Show, TcSource, TransitionCfg, Trigger};
-use crate::{audio, media, ndi, net, timecode};
+use crate::{audio, builds, media, ndi, net, timecode};
 use egui::{
     pos2, Align, Color32, CornerRadius, Frame, Key, Layout, Margin, Rect, RichText, Sense, Stroke,
     TextureHandle, Vec2,
@@ -144,9 +144,12 @@ pub struct App {
     mtime: Option<SystemTime>,
     changed_on_disk: bool,
     last_mtime_check: Instant,
+    /// Pictures by page of the PDF (a slide has a page per build step).
     thumbs: HashMap<usize, TextureHandle>,
     fulls: HashMap<usize, Full>,
     full_size: (u32, u32),
+    /// First page of each slide in the PDF.
+    first_page: Vec<usize>,
     player: Player,
     chase: Chase,
     tc: timecode::Input,
@@ -224,6 +227,7 @@ impl App {
             thumbs: HashMap::new(),
             fulls: HashMap::new(),
             full_size: (0, 0),
+            first_page: Vec::new(),
             player: Player::default(),
             chase: Chase::default(),
             tc: timecode::Input::default(),
@@ -355,15 +359,31 @@ impl App {
                     .extension()
                     .and_then(|e| e.to_str())
                     .is_some_and(|e| e.eq_ignore_ascii_case("pptx"));
-                let info = if is_pptx {
+                let mut info = if is_pptx {
                     Some(pptx::read(&path)?)
                 } else {
                     None
                 };
+                // Builds: a copy with a slide for each step goes to LibreOffice.
+                let mut source = path.clone();
+                if let Some(i) = info.as_mut() {
+                    if i.slides.iter().any(|s| !s.builds.is_empty()) {
+                        let copy = office::fingerprint(&path)
+                            .map(|f| office::cache_dir().join("builds").join(format!("{f}.pptx")));
+                        match copy.and_then(|c| builds::expand(&path, &c).map(|_| c)) {
+                            Ok(c) => source = c,
+                            Err(_) => {
+                                for s in &mut i.slides {
+                                    s.builds.clear();
+                                }
+                            }
+                        }
+                    }
+                }
                 let pdf = if is_pdf {
                     path.clone()
                 } else {
-                    office::to_pdf(&path, &|s| {
+                    office::to_pdf(&source, &|s| {
                         if let Ok(mut g) = st.lock() {
                             *g = s;
                         }
@@ -409,7 +429,8 @@ impl App {
             }
         };
         let visible = info.as_ref().map(|i| i.visible()).unwrap_or_default();
-        self.slides = if visible.len() == deck.pages {
+        let pages_of = |v: &[SlideInfo]| v.iter().map(|s| s.builds.len() + 1).sum::<usize>();
+        self.slides = if pages_of(&visible) == deck.pages || visible.len() == deck.pages {
             visible
         } else {
             (0..deck.pages)
@@ -420,6 +441,7 @@ impl App {
                     hidden: false,
                     transition: Transition::Cut,
                     video: None,
+                    builds: Vec::new(),
                 })
                 .collect()
         };
@@ -434,17 +456,20 @@ impl App {
         if self.saved.as_ref().is_some_and(|s| s.slides.is_empty()) {
             self.saved = Some(self.show.clone());
         }
+        self.set_pages(deck.pages);
         let tw = 320u32;
         let th = (tw as f32 / deck.aspect).round() as u32;
-        for p in 0..deck.pages {
-            deck.request(p, tw, th, Kind::Thumb);
+        // The list shows each slide finished.
+        for s in 0..self.slides.len() {
+            deck.request(self.full_page(s), tw, th, Kind::Thumb);
         }
         self.thumbs.clear();
         self.fulls.clear();
         if let Some(c) = self.player.current {
-            if c >= deck.pages {
+            if c >= self.slides.len() {
                 self.player.current = None;
             }
+            self.player.step = self.player.step.min(self.steps_of(c));
         }
         self.player.previous = None;
         self.deck = Some(deck);
@@ -559,15 +584,21 @@ impl App {
             self.start_video();
             return;
         }
-        if let Some(n) = self.next_index() {
-            self.goto_by(Some(n), logui::Why::Go);
+        match self.next_cue() {
+            Some((s, k)) if Some(s) == self.player.current => self.build_step(k, logui::Why::Go),
+            Some((n, _)) => self.goto_by(Some(n), logui::Why::Go),
+            None => {}
         }
     }
 
     fn back(&mut self) {
         if let Some(c) = self.player.current {
-            if c > 0 {
-                self.goto_by(Some(c - 1), logui::Why::Back);
+            if self.player.step > 0 {
+                // A build back.
+                self.build_step(self.player.step - 1, logui::Why::Back);
+            } else if c > 0 {
+                // The slide before, as it was left: finished.
+                self.goto_step(c - 1, self.steps_of(c - 1), logui::Why::Back);
             }
         }
     }
@@ -597,16 +628,22 @@ impl App {
         }
         let Some(deck) = &self.deck else { return };
         let mut want: Vec<usize> = Vec::new();
-        want.extend(self.player.current);
-        want.extend(self.player.previous);
-        want.extend(self.next_index());
+        want.extend(self.live_page());
+        want.extend(self.prev_page());
+        want.extend(self.cue_page(self.next_cue()));
+        want.extend(self.next_index().map(|n| self.page_at(n, 0)));
         if let Some(c) = self.player.current {
-            if c > 0 {
-                want.push(c - 1);
+            // GO− and the one after next.
+            if self.player.step > 0 {
+                want.push(self.page_at(c, self.player.step - 1));
+            } else if c > 0 {
+                want.push(self.full_page(c - 1));
             }
-            want.push(c + 2);
+            if c + 2 < self.slides.len() {
+                want.push(self.page_at(c + 2, 0));
+            }
         }
-        want.extend(self.selected);
+        want.extend(self.selected.map(|s| self.full_page(s)));
         want.retain(|p| *p < deck.pages);
         for p in &want {
             if !self.fulls.contains_key(p) {
@@ -709,8 +746,8 @@ impl App {
         let pic = |p: Option<usize>| p.and_then(|p| self.fulls.get(&p)).map(|f| f.image.clone());
         let p = &self.player;
         let scene = ndi::Scene {
-            previous: pic(p.previous),
-            current: pic(p.current),
+            previous: pic(self.prev_page()),
+            current: pic(self.live_page()),
             since: p.since,
             fade: p.fade,
             black_from: p.black_level(),
@@ -838,8 +875,8 @@ impl App {
             return;
         }
         let (mut prev, mut cur) = (
-            self.tex(self.player.previous).cloned(),
-            self.tex(self.player.current).cloned(),
+            self.tex(self.prev_page()).cloned(),
+            self.tex(self.live_page()).cloned(),
         );
         let (mut mix, mut black) = (self.player.mix(), self.player.black_level());
         let (pv, cv) = self.overlays();
@@ -1039,7 +1076,7 @@ impl App {
     /// apart and in their own colours, so they are not hit by mistake. The
     /// sizes come from the width (see `TransportLayout`): nothing overlaps,
     /// and when it is too narrow Blackout and Reset go to a row of their own.
-    fn transport(&mut self, ui: &mut egui::Ui, next: Option<usize>) {
+    fn transport(&mut self, ui: &mut egui::Ui, next: Option<(usize, usize)>) {
         let l = TransportLayout::for_width(ui.available_width());
         let h = l.height;
         let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -1079,7 +1116,7 @@ impl App {
         }
     }
 
-    fn go_button(&mut self, ui: &mut egui::Ui, next: Option<usize>, w: f32, h: f32) {
+    fn go_button(&mut self, ui: &mut egui::Ui, next: Option<(usize, usize)>, w: f32, h: f32) {
         let starts_video = self.go_starts_video();
         let can_go = next.is_some() || starts_video;
         let (r, go) = ui.allocate_exact_size(
@@ -1100,7 +1137,7 @@ impl App {
         ui.painter().rect_filled(r, 8.0, fill);
         let what: String = match next {
             _ if starts_video => "Play video".into(),
-            Some(n) => format!("Slide {}", n + 1),
+            Some(n) => self.cue_label(n),
             None => "End".into(),
         };
         go.widget_info(|| {
@@ -1255,7 +1292,7 @@ impl App {
                         rect.left_top() + Vec2::new(36.0, 7.0),
                         Vec2::new(tw, th),
                     );
-                    match self.thumbs.get(&i) {
+                    match self.thumbs.get(&self.full_page(i)) {
                         Some(t) => {
                             p.image(t.id(), thumb, full_uv(), Color32::WHITE);
                         }
@@ -1311,6 +1348,21 @@ impl App {
                         mc,
                     );
                     x = r.right() + 8.0;
+                    if !s.builds.is_empty() {
+                        let n = s.builds.len();
+                        let r = p.text(
+                            pos2(x, y),
+                            egui::Align2::LEFT_TOP,
+                            if n == 1 {
+                                "1 build".to_string()
+                            } else {
+                                format!("{n} builds")
+                            },
+                            egui::FontId::proportional(11.5),
+                            AMBER,
+                        );
+                        x = r.right() + 8.0;
+                    }
                     if !s.notes.is_empty() {
                         p.text(
                             pos2(x, y),
@@ -1353,7 +1405,7 @@ impl App {
             self.clock_strip(ui);
             ui.add_space(14.0);
         }
-        let next = self.next_index();
+        let next = self.next_cue();
         let avail = ui.available_size();
         let aspect = {
             let (w, h) = self.output_size();
@@ -1381,6 +1433,12 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("LIVE").small().strong().color(CURRENT));
                     let what = match self.player.current {
+                        Some(c) if self.steps_of(c) > 0 => format!(
+                            "Slide {} of {total} · build {}/{}",
+                            c + 1,
+                            self.player.step,
+                            self.steps_of(c)
+                        ),
                         Some(c) => format!("Slide {} of {total}", c + 1),
                         None => "Black".into(),
                     };
@@ -1410,7 +1468,7 @@ impl App {
                             });
                         }
                         if self.player.current.is_some() {
-                            let s = self.player.since.elapsed().as_secs();
+                            let s = self.player.on_slide.elapsed().as_secs();
                             ui.label(
                                 RichText::new(format!("{}:{:02}", s / 60, s % 60))
                                     .small()
@@ -1431,8 +1489,8 @@ impl App {
                     None => paint_output(
                         ui.painter(),
                         r,
-                        self.tex(self.player.previous),
-                        self.tex(self.player.current),
+                        self.tex(self.prev_page()),
+                        self.tex(self.live_page()),
                         self.player.mix(),
                         self.player.black_level(),
                         pv,
@@ -1468,16 +1526,21 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("NEXT").small().strong().color(NEXT));
                     if let Some(n) = next {
-                        ui.label(
-                            RichText::new(format!("Slide {}", n + 1))
-                                .small()
-                                .color(MUTED),
-                        );
+                        ui.label(RichText::new(self.cue_label(n)).small().color(MUTED));
                     }
                 });
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(next_w, next_w / aspect), Sense::hover());
-                paint_output(ui.painter(), r, None, self.tex(next), 1.0, 0.0, None, None);
+                paint_output(
+                    ui.painter(),
+                    r,
+                    None,
+                    self.tex(self.cue_page(next)),
+                    1.0,
+                    0.0,
+                    None,
+                    None,
+                );
                 ui.painter()
                     .rect_stroke(r, 4.0, Stroke::new(1.0, NEXT), egui::StrokeKind::Outside);
                 if next.is_none() {
@@ -1489,7 +1552,7 @@ impl App {
                         MUTED,
                     );
                 }
-                if let Some(n) = next {
+                if let Some((n, k)) = next {
                     ui.add_space(4.0);
                     let title = self
                         .slides
@@ -1501,6 +1564,7 @@ impl App {
                     }
                     let cfg = self.show.slides.get(n);
                     let t = match cfg.map(|c| c.trigger).unwrap_or_default() {
+                        _ if k > 0 => "build on this slide, comes with GO".to_string(),
                         Trigger::Go => "comes with GO".to_string(),
                         Trigger::Timecode => {
                             format!("comes at TC {}", cfg.map(|s| s.tc.as_str()).unwrap_or(""))
@@ -1621,7 +1685,7 @@ impl App {
         .on_hover_text(self.tc.status());
 
         let on_slide = self.player.current.map(|_| {
-            let s = self.player.since.elapsed().as_secs();
+            let s = self.player.on_slide.elapsed().as_secs();
             format!("{}:{:02}", s / 60, s % 60)
         });
         clock_cell(
@@ -1712,7 +1776,7 @@ impl App {
             ui.add(egui::Label::new(RichText::new(title).color(MUTED)).truncate());
         }
         ui.add_space(6.0);
-        if let Some(t) = self.thumbs.get(&i) {
+        if let Some(t) = self.thumbs.get(&self.full_page(i)) {
             let w = ui.available_width();
             let aspect = self.deck.as_ref().map(|d| d.aspect).unwrap_or(16.0 / 9.0);
             ui.add(
@@ -3140,6 +3204,8 @@ impl App {
     }
 }
 
+#[path = "app_builds.rs"]
+mod buildsui;
 #[path = "app_health.rs"]
 mod health;
 #[path = "app_log.rs"]

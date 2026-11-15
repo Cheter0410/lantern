@@ -1113,3 +1113,141 @@ fn several_outputs_show_the_same_picture() {
     assert!(h.state().output_started.is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Share of nearly white pixels in a part of a picture (x0, y0, x1, y1 as
+/// fractions).
+fn white_share(img: &crate::deck::Image, r: [f32; 4]) -> f32 {
+    let (w, h) = (img.w as f32, img.h as f32);
+    let (x0, y0, x1, y1) = (
+        (r[0] * w) as u32,
+        (r[1] * h) as u32,
+        (r[2] * w) as u32,
+        (r[3] * h) as u32,
+    );
+    let mut white = 0;
+    let mut all = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * img.w + x) * 4) as usize;
+            let px = &img.rgba[i..i + 3];
+            all += 1;
+            if px.iter().all(|c| *c > 200) {
+                white += 1;
+            }
+        }
+    }
+    white as f32 / all.max(1) as f32
+}
+
+/// A slide with builds: GO brings the box, then the bullets one by one, and
+/// only then the next slide; GO− steps back; the pictures are the steps.
+#[test]
+fn builds_come_one_click_after_the_other() {
+    if crate::office::find().is_none() {
+        eprintln!("skipped: needs LibreOffice");
+        return;
+    }
+    let dir = temp_dir("builds");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let file = dir.join("builds.pptx");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/builds.pptx"),
+        &file,
+    )
+    .expect("copy pptx");
+    let mut h = harness_for(file);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| {
+        a.slides.len() == 3 && a.loading.is_none() && a.deck.is_some()
+    });
+    assert_eq!(h.state().deck.as_ref().map(|d| d.pages), Some(7));
+    assert_eq!(h.state().first_page, [0, 1, 6]);
+    assert_eq!(h.state().steps_of(1), 4);
+
+    let go = |h: &mut Harness<'_, App>| {
+        h.state_mut().go();
+        h.run_steps(2);
+    };
+    go(&mut h);
+    go(&mut h);
+    assert_eq!(
+        (h.state().player.current, h.state().player.step),
+        (Some(1), 0)
+    );
+    run_until(&mut h, "the pictures", |a| {
+        a.live_page().is_some_and(|p| a.fulls.contains_key(&p))
+            && a.cue_page(a.next_cue())
+                .is_some_and(|p| a.fulls.contains_key(&p))
+    });
+    assert!(h.query_by_label("GO+ Build 1/4").is_some());
+    shots.take(&mut h, "b1-step0");
+    // Box and bullets: not there yet.
+    let box_r = [0.09, 0.69, 0.36, 0.78];
+    let list_r = [0.45, 0.57, 0.95, 0.9];
+    let page = |a: &App, p: usize| a.fulls.get(&p).map(|f| f.image.clone()).expect("picture");
+    let step0 = page(h.state(), 1);
+    let box_color = |img: &crate::deck::Image| {
+        let (x, y) = ((0.2 * img.w as f32) as u32, (0.73 * img.h as f32) as u32);
+        let i = ((y * img.w + x) * 4) as usize;
+        [img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]]
+    };
+    assert!(
+        white_share(&step0, list_r) < 0.001,
+        "the bullets are invisible"
+    );
+    let bg = box_color(&step0);
+
+    go(&mut h);
+    assert_eq!(h.state().player.step, 1);
+    go(&mut h);
+    go(&mut h);
+    run_until(&mut h, "step 3", |a| {
+        a.live_page().is_some_and(|p| a.fulls.contains_key(&p))
+    });
+    shots.take(&mut h, "b2-step3");
+    let step1 = page(h.state(), 2);
+    assert_ne!(box_color(&step1), bg, "the box came with the first click");
+    assert!(white_share(&step1, list_r) < 0.001);
+    let step3 = page(h.state(), 4);
+    let two = white_share(&step3, list_r);
+    assert!(two > 0.005, "two bullets: {two}");
+    let _ = box_r;
+
+    go(&mut h);
+    assert_eq!(h.state().player.step, 4);
+    assert!(h.query_by_label("GO+ Slide 3").is_some());
+    run_until(&mut h, "step 4", |a| a.fulls.contains_key(&5));
+    let step4 = page(h.state(), 5);
+    assert!(white_share(&step4, list_r) > two * 1.2, "the third bullet");
+
+    // GO− : a build back, then the slide before finished.
+    h.state_mut().back();
+    h.run_steps(2);
+    assert_eq!(
+        (h.state().player.current, h.state().player.step),
+        (Some(1), 3)
+    );
+    go(&mut h);
+    go(&mut h);
+    assert_eq!(h.state().player.current, Some(2));
+    h.state_mut().back();
+    h.run_steps(2);
+    assert_eq!(
+        (h.state().player.current, h.state().player.step),
+        (Some(1), 4),
+        "back to the slide before: finished"
+    );
+    // The log says which build.
+    h.run_steps(2);
+    assert!(
+        h.state()
+            .log
+            .log
+            .entries
+            .iter()
+            .any(|e| e.text.contains("build 2/4 – GO")),
+        "{:?}",
+        h.state().log.log.entries
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

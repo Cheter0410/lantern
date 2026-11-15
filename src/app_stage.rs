@@ -90,7 +90,7 @@ impl App {
                 .cloned()
         };
         let total = self.slides.len();
-        let next = self.next_index();
+        let next = self.next_cue();
         let (w, h) = self.output_size();
         let left = self.stage.timer.remaining();
         let (timer_color, timer_state) = if self.stage.timer.untouched() {
@@ -117,28 +117,34 @@ impl App {
             )
         };
         StageScene {
-            cur: pic(self.player.current),
+            cur: pic(self.live_page()),
             cur_video: self.overlays().1.cloned(),
-            next: pic(next),
+            next: pic(self.cue_page(next)),
             blackout: self.player.blackout,
             aspect: w as f32 / h.max(1) as f32,
             slide: match self.player.current {
+                Some(c) if self.steps_of(c) > 0 => format!(
+                    "{} / {total} · {}/{}",
+                    c + 1,
+                    self.player.step,
+                    self.steps_of(c)
+                ),
                 Some(c) => format!("{} / {total}", c + 1),
                 None => format!("– / {total}"),
             },
             on_slide: match self.player.current {
                 Some(_) => {
-                    let s = self.player.since.elapsed().as_secs();
+                    let s = self.player.on_slide.elapsed().as_secs();
                     format!("on slide {}:{:02}", s / 60, s % 60)
                 }
                 None => "not started".into(),
             },
             next_label: match next {
-                Some(n) => format!("Slide {}", n + 1),
+                Some(n) => self.cue_label(n),
                 None => "End".into(),
             },
             next_title: next
-                .and_then(|n| self.slides.get(n))
+                .and_then(|(n, _)| self.slides.get(n))
                 .map(|s| s.title.clone())
                 .unwrap_or_default(),
             notes: self

@@ -6,6 +6,7 @@
 
 mod app;
 mod audio;
+mod builds;
 mod deck;
 mod health;
 mod media;

@@ -48,6 +48,7 @@ enum VideoState {
 #[derive(Clone, Debug, PartialEq)]
 struct Seen {
     slide: Option<usize>,
+    step: usize,
     blackout: bool,
     video: Option<(usize, VideoState)>,
     timer_running: bool,
@@ -130,6 +131,7 @@ impl App {
         });
         Seen {
             slide: self.player.current,
+            step: self.player.step,
             blackout: self.player.blackout,
             video,
             timer_running: self.stage.timer.running(),
@@ -198,7 +200,7 @@ impl App {
                 },
             );
         }
-        if now.slide != was.slide {
+        if now.slide != was.slide || now.step != was.step {
             let how = match why {
                 Some(Why::Go) => format!(" – GO{by}"),
                 Some(Why::Back) => format!(" – GO−{by}"),
@@ -209,6 +211,12 @@ impl App {
                 Some(Why::Reset) | None => by.to_string(),
             };
             let text = match now.slide {
+                Some(i) if self.steps_of(i) > 0 => format!(
+                    "{} · build {}/{}{how}",
+                    self.slide_name(i),
+                    now.step,
+                    self.steps_of(i)
+                ),
                 Some(i) => format!("{}{how}", self.slide_name(i)),
                 None => format!("Reset – nothing on the output{by}"),
             };
