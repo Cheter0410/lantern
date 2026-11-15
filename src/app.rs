@@ -51,6 +51,8 @@ const CLOCK_BG: Color32 = Color32::from_rgb(10, 11, 14);
 #[serde(default)]
 struct Settings {
     last: Option<PathBuf>,
+    /// Shows opened lately, newest first (start screen).
+    recent: Vec<PathBuf>,
     /// Live mode: the show runs, nothing about it can be changed by accident.
     live: bool,
 }
@@ -165,6 +167,9 @@ pub struct App {
     test: testpic::TestPicture,
     /// Output level (decaying peak), left and right.
     meter: [f32; 2],
+    /// Start screen, setup wizard or the main window.
+    screen: start::Screen,
+    start: start::StartState,
 }
 
 impl App {
@@ -220,10 +225,12 @@ impl App {
             midi_ports_at: Instant::now() - Duration::from_secs(10),
             test: testpic::TestPicture::default(),
             meter: [0.0; 2],
+            screen: start::Screen::Start,
+            start: start::StartState::default(),
         };
-        let start = open.or_else(|| app.settings.last.clone().filter(|p| p.exists()));
-        if let Some(p) = start {
-            app.open(&p, ctx);
+        // A file given to open: straight to it. Otherwise the start screen.
+        if let Some(p) = open {
+            app.open_main(&p, ctx);
         }
         app
     }
@@ -284,8 +291,7 @@ impl App {
         self.show = show;
         self.saved = Some(self.show.clone());
         self.show_file = Some(file.clone());
-        self.settings.last = Some(file);
-        self.settings.save();
+        self.remember(&file);
         self.player = Player::default();
         self.chase.reset();
         self.selected = None;
@@ -891,6 +897,14 @@ impl App {
                     .clicked()
                 {
                     self.settings_open = !self.settings_open;
+                }
+                if !self.live()
+                    && ui
+                        .add(flat_button("Shows"))
+                        .on_hover_text("Back to the start screen: new, open, migrate")
+                        .clicked()
+                {
+                    self.back_to_start();
                 }
                 if !self.live()
                     && ui
@@ -2718,15 +2732,19 @@ impl eframe::App for App {
                 .find(|p| !p.as_os_str().is_empty())
         });
         if let Some(p) = dropped {
-            if self.live() {
-                self.locked();
-            } else {
-                self.open(&p, &ctx);
+            match self.screen {
+                start::Screen::Main if self.live() => self.locked(),
+                start::Screen::Main => self.open(&p, &ctx),
+                start::Screen::Start => self.open_main(&p, &ctx),
+                // The wizard sets up the new show: no other file now.
+                start::Screen::Wizard(_) => {}
             }
         }
         self.tc.apply(&self.show.timecode.clone());
         self.update_osc(&ctx);
-        self.keys(&ctx);
+        if self.screen == start::Screen::Main {
+            self.keys(&ctx);
+        }
         self.follow_timecode();
         self.update_video(&ctx);
         self.update_test_picture(&ctx);
@@ -2750,6 +2768,38 @@ impl eframe::App for App {
             .map(|p| (self.show.timecode.rtp_name.clone(), p));
         self.net.update(osc_port, rtp);
 
+        match self.screen {
+            start::Screen::Main => self.main_window(ui),
+            start::Screen::Start => {
+                egui::CentralPanel::default()
+                    .frame(Frame::new().fill(BG))
+                    .show(ui, |ui| self.start_screen(ui));
+                self.toast(&ctx);
+            }
+            start::Screen::Wizard(step) => {
+                egui::CentralPanel::default()
+                    .frame(Frame::new().fill(BG))
+                    .show(ui, |ui| self.wizard(ui, step));
+                self.toast(&ctx);
+            }
+        }
+        if self.player.animating() {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(
+                if self.show.timecode.source == TcSource::Off {
+                    250
+                } else {
+                    33
+                },
+            ));
+        }
+    }
+}
+
+impl App {
+    fn main_window(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         egui::Panel::top("top")
             .frame(
                 Frame::new()
@@ -2799,20 +2849,11 @@ impl eframe::App for App {
         if self.settings_open {
             self.settings_window(&ctx);
         }
-        if self.player.animating() {
-            ctx.request_repaint();
-        } else {
-            ctx.request_repaint_after(Duration::from_millis(
-                if self.show.timecode.source == TcSource::Off {
-                    250
-                } else {
-                    33
-                },
-            ));
-        }
     }
 }
 
+#[path = "app_start.rs"]
+mod start;
 #[path = "app_testpic.rs"]
 mod testpic;
 #[path = "app_video.rs"]

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+- Start screen: Lantern opens on a banner with *New show*, *Open show*, *Migrate older show* and the
+  recent shows (with folder and last change; missing ones are said and dropped). A file given on the
+  command line or dropped on it opens straight away. *Shows* in the top bar goes back to it.
+- Show folders: *New show* makes a folder with the show's name at a place you choose and copies or
+  moves the presentation into it, next to `<Show name>.lantern` (the presentation is kept relative,
+  so the folder can move). A name already taken or a missing presentation is said before anything
+  is made.
+- Setup wizard for a new show: Output (display, resolution, NDI, frame rate, test picture) →
+  Audio (device, channels, test tone, level) → Timecode (LTC, MTC from a MIDI input or the network,
+  with what is received) → Ready (a summary, and the presentation loading meanwhile). Back, Next and
+  *Skip setup*; the main window opens only after it. The test picture turns off when the show opens.
+- *Migrate older show*: a `.lantern` file or a presentation with its `.lantern` next to it becomes a
+  show folder (copied or moved); slide settings, outputs, sound and timecode come along. When moved,
+  the old show file is kept in the folder as `migrated-from.lantern.bak`.
+- Lantern no longer opens the last show by itself; it is at the top of *Recent shows*.
+
 ## 0.3.4
 
 - Test picture runs on the real clock: the 1 s flash comes exactly on every full second and the frame

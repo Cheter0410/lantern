@@ -28,8 +28,15 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **On another computer:** Lantern announces itself on the network (Bonjour, `_lantern._udp`); in
   Show Master the Lantern cue lists it under *Network*. Settings › Network shows the name and the IP
   address. Timecode comes over the network too (RTP-MIDI), or as LTC by cable.
-- The settings of a presentation are kept next to it (`talk.pptx` → `talk.lantern`); a changed
-  presentation is noticed and can be reloaded without losing them.
+- **Start screen and show folders:** Lantern starts with *New show*, *Open show*, *Migrate older
+  show* and the recent shows. A new show is a folder at a place you choose, holding the presentation
+  (copied or moved there) and `<Show name>.lantern` – copy, back up or take it to another computer as
+  one piece. A setup wizard then goes through the output (display, NDI, frame rate, test picture),
+  the sound (device, channels, test tone) and the timecode before the main window opens.
+  *Migrate* turns an older show (`talk.pptx` with `talk.lantern` next to it) into a show folder,
+  with all its settings. *Shows* in the top bar goes back to the start screen.
+- A changed presentation is noticed and can be reloaded without losing the slide settings. A
+  presentation opened on its own still keeps its settings next to it (`talk.pptx` → `talk.lantern`).
 
 Keys: Space, →, ↓, Page Down, Enter, N = GO+ · ←, ↑, Page Up, Backspace, P = GO− · B or . = blackout · K = play / pause the video ·
 Home = first slide · Esc = close the slide settings · Ctrl/⌘+O = open · Ctrl/⌘+R = read the file again ·

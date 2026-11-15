@@ -15,6 +15,7 @@ mod osc;
 mod platform;
 mod pptx;
 mod show;
+mod showfolder;
 mod terminal;
 mod testpattern;
 mod timecode;

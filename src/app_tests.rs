@@ -430,3 +430,150 @@ fn plays_the_video_of_a_pptx() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn start_harness() -> Harness<'static, App> {
+    let mut b = Harness::builder().with_size([1400.0, 860.0]);
+    if std::env::var_os("LANTERN_SHOTS").is_some() {
+        b = b.wgpu();
+    }
+    let mut h = b.build_eframe(|cc| App::new(&cc.egui_ctx, None));
+    // Other tests share the settings folder: start clean.
+    h.state_mut().settings = super::Settings::default();
+    h.run_steps(2);
+    h
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lantern-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::env::set_var("LANTERN_CONFIG_DIR", dir.join("config"));
+    dir
+}
+
+#[test]
+fn new_show_runs_the_setup_wizard() {
+    use super::start::{Screen, Step};
+    let dir = temp_dir("startscreen");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    if let Some(d) = &shots.0 {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let talk = dir.join("Talk.pdf");
+    std::fs::write(&talk, pdf(3)).expect("write pdf");
+
+    let mut h = start_harness();
+    assert_eq!(h.state().screen, Screen::Start, "no file: the start screen");
+    for l in ["New show", "Open show", "Migrate older show"] {
+        assert!(h.query_by_label(l).is_some(), "{l}");
+    }
+    shots.take(&mut h, "s1-start");
+
+    h.get_by_label("New show").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Create and set up").is_some());
+    {
+        let p = &mut h.state_mut().start.plan;
+        // The file dialogs can't run in a test: fill in what they would.
+        p.name = "Gala 2026".into();
+        p.presentation = talk.clone();
+        p.location = dir.join("shows");
+    }
+    h.run_steps(3);
+    shots.take(&mut h, "s2-new-show");
+    h.get_by_label("Create and set up").click();
+    h.run_steps(3);
+    let folder = dir.join("shows/Gala 2026");
+    assert_eq!(h.state().screen, Screen::Wizard(Step::Output));
+    assert!(folder.join("Talk.pdf").is_file(), "presentation copied in");
+    assert!(talk.is_file(), "copy keeps the original");
+    assert!(folder.join("Gala 2026.lantern").is_file());
+    shots.take(&mut h, "s3-wizard-output");
+
+    // Output → Audio → Timecode → Ready, and Back.
+    h.get_by_label("Next").click();
+    h.run_steps(3);
+    assert_eq!(h.state().screen, Screen::Wizard(Step::Audio));
+    assert!(h.query_by_label("Test tone").is_some());
+    shots.take(&mut h, "s4-wizard-audio");
+    h.get_by_label("Back").click();
+    h.run_steps(3);
+    assert_eq!(h.state().screen, Screen::Wizard(Step::Output));
+    h.get_by_label("Next").click();
+    h.run_steps(3);
+    h.get_by_label("Next").click();
+    h.run_steps(3);
+    assert_eq!(h.state().screen, Screen::Wizard(Step::Timecode));
+    h.get_by_label("LTC (Audio)").click();
+    h.run_steps(3);
+    shots.take(&mut h, "s5-wizard-timecode");
+    h.get_by_label("Next").click();
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    assert_eq!(h.state().screen, Screen::Wizard(Step::Ready));
+    assert!(h.query_by_label("3 slides ready").is_some());
+    shots.take(&mut h, "s6-wizard-ready");
+    h.get_by_label("Open show").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().screen,
+        Screen::Main,
+        "the main window after the wizard"
+    );
+    assert_eq!(h.state().show.timecode.source, super::TcSource::Ltc);
+    shots.take(&mut h, "s7-main");
+    // The wizard's choices are in the show file.
+    let saved = crate::show::Show::load(&folder.join("Gala 2026.lantern")).expect("show");
+    assert_eq!(saved.timecode.source, super::TcSource::Ltc);
+
+    // Back to the start screen: the show is under Recent.
+    h.get_by_label("Shows").click();
+    h.run_steps(3);
+    assert_eq!(h.state().screen, Screen::Start);
+    assert_eq!(
+        h.state().settings.recent.first(),
+        Some(&folder.join("Gala 2026.lantern"))
+    );
+    shots.take(&mut h, "s8-start-recent");
+    h.get_by_label("Gala 2026").click();
+    h.run_steps(3);
+    assert_eq!(h.state().screen, Screen::Main);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn migrates_an_older_show() {
+    use super::start::Screen;
+    let dir = temp_dir("migrateui");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let pres = dir.join("Old Show.pdf");
+    std::fs::write(&pres, pdf(2)).expect("write pdf");
+    let mut old = crate::show::Show {
+        presentation: pres.clone(),
+        ..Default::default()
+    };
+    old.timecode.source = super::TcSource::Midi;
+    old.save(&super::show_file_for(&pres)).expect("old show");
+
+    let mut h = start_harness();
+    h.get_by_label("Migrate older show").click();
+    h.run_steps(3);
+    h.state_mut().choose_old(&pres);
+    h.state_mut().start.plan.location = dir.join("shows");
+    h.run_steps(3);
+    shots.take(&mut h, "s9-migrate");
+    h.get_by_label("Migrate and open").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().screen,
+        Screen::Main,
+        "migrated shows open directly"
+    );
+    assert_eq!(h.state().show.timecode.source, super::TcSource::Midi);
+    assert_eq!(
+        h.state().show_file.as_deref(),
+        Some(dir.join("shows/Old Show/Old Show.lantern").as_path())
+    );
+    assert!(pres.is_file(), "copied: the old show is still there");
+    run_until(&mut h, "the slides", |a| a.slides.len() == 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
