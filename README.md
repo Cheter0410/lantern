@@ -16,6 +16,9 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   so Show Master and Macs find the session "Lantern"). Jumps back locate to the right slide.
 - **Outputs:** full-screen on any display (pure picture: no cursor, no symbols, no menus) and NDI
   (needs the NDI runtime, e.g. with NDI Tools from ndi.video).
+- **Test picture:** Settings › Output switches the outputs to a moving test picture in their own
+  resolution (geometry, cropping, levels, sharpness, frame counter, clock, timecode, dropped frames
+  and delay at a glance); the top bar shows it is on air and turns it off.
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
   `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`; for the live slide's video or sound
   `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`, `/video/seek <s>`,

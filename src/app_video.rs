@@ -377,8 +377,29 @@ impl App {
 
     /// The bar under the Live picture while the live slide has a video or
     /// sound: back to the start, play/pause, ±10 s, timeline with times.
+    /// Always the same height, with or without a video, so GO and the
+    /// buttons below never move.
     pub(super) fn video_transport(&mut self, ui: &mut egui::Ui) {
-        let Some(v) = self.video.as_ref() else { return };
+        let Some(v) = self.video.as_ref() else {
+            ui.add_space(8.0);
+            Frame::new()
+                .fill(PANEL)
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let row = Vec2::new(ui.available_width(), 30.0);
+                    ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+                        ui.set_min_height(30.0);
+                        ui.label(
+                            RichText::new("No video or sound on this slide")
+                                .small()
+                                .color(Color32::from_gray(90)),
+                        );
+                    });
+                });
+            return;
+        };
         let slide = v.slide;
         let audio_only = self.video_info(slide).is_some_and(|i| i.audio_only);
         let duration = self
@@ -419,11 +440,23 @@ impl App {
                         .clicked()
                     };
                     ui.label(
-                        RichText::new(if audio_only { "AUDIO" } else { "VIDEO" })
-                            .small()
-                            .strong()
-                            .color(if playing { CURRENT } else { MUTED }),
-                    );
+                        RichText::new(match (audio_only, error.is_some()) {
+                            (true, false) => "AUDIO",
+                            (false, false) => "VIDEO",
+                            (true, true) => "AUDIO – CAN'T PLAY",
+                            (false, true) => "VIDEO – CAN'T PLAY",
+                        })
+                        .small()
+                        .strong()
+                        .color(if error.is_some() {
+                            AMBER
+                        } else if playing {
+                            CURRENT
+                        } else {
+                            MUTED
+                        }),
+                    )
+                    .on_hover_text(error.clone().unwrap_or_default());
                     let r = ui
                         .add(
                             egui::Button::new("")
@@ -547,9 +580,6 @@ impl App {
                             .color(MUTED),
                     );
                 });
-                if let Some(e) = error {
-                    ui.label(RichText::new(e).small().color(AMBER));
-                }
             });
         if let Some(c) = cmd {
             self.video_command(c);

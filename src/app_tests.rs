@@ -308,8 +308,17 @@ fn plays_the_video_of_a_pptx() {
 
     h.key_press(Key::Space);
     h.run_steps(3);
+    let go_without = h.get_by_label_contains("GO+").rect();
+    let back_without = h.get_by_label("GO\u{2212}").rect();
     h.key_press(Key::Space);
     run_until(&mut h, "slide 2 live", |a| a.player.current == Some(1));
+    h.run_steps(3);
+    assert_eq!(
+        h.get_by_label_contains("GO+").rect(),
+        go_without,
+        "GO+ stays where it is when a slide has a video"
+    );
+    assert_eq!(h.get_by_label("GO\u{2212}").rect(), back_without);
     assert!(h.state().go_starts_video(), "the video waits for GO");
     assert!(h.query_by_label_contains("Play video").is_some());
     let (len, playing) = h.state().video_left().expect("video length");
@@ -384,6 +393,31 @@ fn plays_the_video_of_a_pptx() {
     assert_eq!(h.state().show.timecode.source, crate::show::TcSource::Midi);
     assert!(h.query_all_by_label_contains("IAC").next().is_some());
     shots.take(&mut h, "9-settings-mtc");
+
+    // Settings › Output: the test picture, on the display and the preview.
+    h.get_by_label("Output").click();
+    h.run_steps(3);
+    h.get_by_label("Test picture on the outputs").click();
+    run_until(&mut h, "the test picture", |a| a.test.tex.is_some());
+    h.key_press(Key::Escape);
+    h.state_mut().set_live(true);
+    std::thread::sleep(Duration::from_millis(100));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("TEST PICTURE ON AIR").is_some());
+    let n0 = h.state().test.frame();
+    std::thread::sleep(Duration::from_millis(200));
+    h.run_steps(3);
+    assert!(h.state().test.frame() > n0, "the test picture moves on");
+    assert_eq!(
+        h.get_by_label_contains("GO+").rect(),
+        go_without,
+        "GO+ stays put with the test picture on"
+    );
+    shots.take(&mut h, "10-test-picture-live");
+    // Off from the banner, also in Live.
+    h.get_by_label("Turn off").click();
+    h.run_steps(3);
+    assert!(!h.state().test.on && h.state().test.tex.is_none());
 
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);

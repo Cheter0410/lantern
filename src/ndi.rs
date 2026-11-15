@@ -172,6 +172,8 @@ pub struct Scene {
     /// Video frames over the slides: picture and pixel position.
     pub previous_video: Option<(Image, (u32, u32))>,
     pub current_video: Option<(Image, (u32, u32))>,
+    /// The test picture instead of the slides (and the timecode to show).
+    pub test: Option<(crate::testpattern::Info, Option<String>)>,
 }
 
 impl Scene {
@@ -278,6 +280,8 @@ impl Sender {
                 }
                 let mut buf: Vec<u8> = Vec::new();
                 let mut planar: Vec<f32> = Vec::new();
+                let mut pattern = crate::testpattern::Pattern::default();
+                let mut test_frame: u64 = 0;
                 while !stop2.load(Ordering::Relaxed) {
                     let s = scene2.lock().ok().and_then(|s| s.clone());
                     let with = |pic: &Option<Image>, v: &Option<(Image, (u32, u32))>| match (pic, v)
@@ -286,6 +290,22 @@ impl Sender {
                         (p, _) => p.clone(),
                     };
                     match s {
+                        Some(Scene {
+                            test: Some((info, tc)),
+                            ..
+                        }) if info.w == w && info.h == h => {
+                            let img = pattern.render(
+                                &info,
+                                &crate::testpattern::Live {
+                                    frame: test_frame,
+                                    time_of_day: crate::testpattern::time_of_day(),
+                                    timecode: tc,
+                                },
+                            );
+                            test_frame += 1;
+                            buf.clear();
+                            buf.extend_from_slice(&img.rgba);
+                        }
                         Some(s) => compose(
                             with(&s.previous, &s.previous_video).as_ref(),
                             with(&s.current, &s.current_video).as_ref(),

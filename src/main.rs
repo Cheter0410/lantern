@@ -16,6 +16,7 @@ mod platform;
 mod pptx;
 mod show;
 mod terminal;
+mod testpattern;
 mod timecode;
 
 fn main() -> eframe::Result<()> {

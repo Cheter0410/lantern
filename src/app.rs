@@ -159,6 +159,8 @@ pub struct App {
     /// MIDI inputs (for MTC), looked up every few seconds while shown.
     midi_ports: Vec<String>,
     midi_ports_at: Instant,
+    /// The test picture on the outputs.
+    test: testpic::TestPicture,
     /// Output level (decaying peak), left and right.
     meter: [f32; 2],
 }
@@ -214,6 +216,7 @@ impl App {
             audio_caps: None,
             midi_ports: Vec::new(),
             midi_ports_at: Instant::now() - Duration::from_secs(10),
+            test: testpic::TestPicture::default(),
             meter: [0.0; 2],
         };
         let start = open.or_else(|| app.settings.last.clone().filter(|p| p.exists()));
@@ -642,6 +645,7 @@ impl App {
                 .as_ref()
                 .and_then(|v| v.overlay.as_ref())
                 .map(|v| (v.image.clone(), v.at)),
+            test: self.test_for_ndi(),
         };
         if let Some(s) = &self.ndi {
             s.set(scene);
@@ -773,13 +777,16 @@ impl App {
         } else {
             b = b.with_fullscreen(true).with_monitor(m);
         }
-        let (prev, cur) = (
+        let (mut prev, mut cur) = (
             self.tex(self.player.previous).cloned(),
             self.tex(self.player.current).cloned(),
         );
-        let (mix, black) = (self.player.mix(), self.player.black_level());
+        let (mut mix, mut black) = (self.player.mix(), self.player.black_level());
         let (pv, cv) = self.overlays();
-        let (pv, cv) = (pv.cloned(), cv.cloned());
+        let (mut pv, mut cv) = (pv.cloned(), cv.cloned());
+        if let Some(t) = &self.test.tex {
+            (prev, cur, mix, black, pv, cv) = (None, Some(t.clone()), 1.0, 0.0, None, None);
+        }
         let mut closed = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of(("lantern-output", m)),
@@ -831,6 +838,8 @@ impl App {
                 );
                 ui.add_space(6.0);
             }
+            // Test picture on: said in the bar (nothing below moves).
+            self.test_badge(ui);
             if self.deck.is_some() || self.loading.is_some() {
                 let name = self
                     .show
@@ -1145,16 +1154,21 @@ impl App {
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(live_w, live_w / aspect), Sense::hover());
                 let (pv, cv) = self.overlays();
-                paint_output(
-                    ui.painter(),
-                    r,
-                    self.tex(self.player.previous),
-                    self.tex(self.player.current),
-                    self.player.mix(),
-                    self.player.black_level(),
-                    pv,
-                    cv,
-                );
+                match &self.test.tex {
+                    Some(t) => {
+                        paint_output(ui.painter(), r, None, Some(t), 1.0, 0.0, None, None);
+                    }
+                    None => paint_output(
+                        ui.painter(),
+                        r,
+                        self.tex(self.player.previous),
+                        self.tex(self.player.current),
+                        self.player.mix(),
+                        self.player.black_level(),
+                        pv,
+                        cv,
+                    ),
+                }
                 ui.painter().rect_stroke(
                     r,
                     4.0,
@@ -1777,6 +1791,7 @@ impl App {
                 );
             }
         }
+        self.test_switch(ui);
         ui.add_space(6.0);
         ui.label(
             RichText::new("The output shows only the slides – no symbols, no mouse pointer.")
@@ -2640,6 +2655,7 @@ impl eframe::App for App {
         self.keys(&ctx);
         self.follow_timecode();
         self.update_video(&ctx);
+        self.update_test_picture(&ctx);
         let peak = self.audio.mixer.take_peak();
         for (m, p) in self.meter.iter_mut().zip(peak) {
             *m = p.max(*m * 0.85);
@@ -2723,6 +2739,8 @@ impl eframe::App for App {
     }
 }
 
+#[path = "app_testpic.rs"]
+mod testpic;
 #[path = "app_video.rs"]
 mod video;
 

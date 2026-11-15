@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.3
+
+- GO+, GO−, Blackout and Clear stay in the same place on every slide: the video bar under the Live
+  picture is always there (empty when the slide has no video or sound), and a video that can't play
+  says so inside the bar.
+- Test picture for the outputs (Settings › Output › *Test picture on the outputs*): drawn pixel for
+  pixel in the output's resolution, on the display and over NDI. Grid, circles and corner marks
+  (geometry, aspect, cropping, mirroring), safe areas, colour bars, grey steps and colour ramps
+  (levels, banding), 1-pixel line patches (scaling), and live: output name, resolution, frame rate,
+  frame counter, time of day with frames, timecode in, a hand turning once a second, one lit box per
+  frame (dropped frames), a flash every full second (delay) and a bar sweeping across (judder).
+  While it is on, the top bar says TEST PICTURE ON AIR with a button to turn it off (also in Live);
+  it is never saved, Lantern always starts with the slides.
+
 ## 0.3.2
 
 - Transport for the live slide's video or sound, in a bar under the Live picture: back to the start,
