@@ -2,3 +2,4 @@ target/
 dist/
 /testdata/*.png
 /testdata/*.pdf
+.DS_Store
