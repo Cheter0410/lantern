@@ -85,6 +85,28 @@ pub fn midi_inputs() -> Vec<String> {
         .collect()
 }
 
+/// Whether a listed MIDI input is the one chosen in the settings. On Linux
+/// (ALSA) a name ends in the client and port number (`… 128:0`), and the
+/// client number changes when a device is plugged in again: compare without it.
+fn same_port(listed: &str, want: &str) -> bool {
+    fn base(n: &str) -> &str {
+        match n.rsplit_once(' ') {
+            Some((b, nums))
+                if nums.split_once(':').is_some_and(|(a, c)| {
+                    !a.is_empty()
+                        && !c.is_empty()
+                        && a.bytes().all(|x| x.is_ascii_digit())
+                        && c.bytes().all(|x| x.is_ascii_digit())
+                }) =>
+            {
+                b
+            }
+            _ => n,
+        }
+    }
+    listed == want || base(listed) == base(want)
+}
+
 /// Feeds MIDI messages into the latest reading: quarter frames and full frames.
 fn mtc_sink(latest: Arc<Mutex<Latest>>) -> impl FnMut(&[u8]) + Send + 'static {
     let start = Instant::now();
@@ -236,7 +258,7 @@ impl Input {
         let want = &self.cfg.midi_port;
         let port = ports
             .iter()
-            .find(|p| want.is_empty() || m.port_name(p).ok().as_deref() == Some(want.as_str()))
+            .find(|p| want.is_empty() || m.port_name(p).is_ok_and(|n| same_port(&n, want)))
             .ok_or_else(|| {
                 if want.is_empty() {
                     "No MIDI input found (on a Mac: Audio MIDI Setup › MIDI Studio › IAC Driver › \"Device is online\")".to_string()
@@ -407,6 +429,15 @@ mod tests {
         assert!((r.secs - (3605.0 + 10.0 / 25.0)).abs() < 0.5, "{r:?}");
     }
 
+    #[test]
+    fn midi_port_names_without_the_alsa_numbers() {
+        assert!(same_port("IAC Driver Bus 1", "IAC Driver Bus 1"));
+        assert!(same_port("MIDI4x4:MIDI4x4 MIDI 1 24:0", "MIDI4x4:MIDI4x4 MIDI 1 28:0"));
+        assert!(!same_port("MIDI4x4:MIDI4x4 MIDI 1 24:0", "MIDI4x4:MIDI4x4 MIDI 2 24:1"));
+        assert!(!same_port("IAC Driver Bus 1", "IAC Driver Bus 2"));
+        assert!(!same_port("Bus 10:30", "Bus 1"));
+    }
+
     /// A virtual MIDI source (like an IAC bus) carrying MTC moves the reading.
     #[cfg(unix)]
     #[test]
@@ -419,15 +450,20 @@ mod tests {
         let Ok(mut src) = out.create_virtual(&name) else {
             return;
         };
+        // macOS lists the name as it is; Linux (ALSA) as
+        // "Lantern test:Lantern MTC test 123 128:0".
         let t0 = Instant::now();
-        while !midi_inputs().contains(&name) {
+        let listed = loop {
+            if let Some(n) = midi_inputs().into_iter().find(|n| n.contains(&name)) {
+                break n;
+            }
             assert!(t0.elapsed() < Duration::from_secs(3), "port not listed");
             std::thread::sleep(Duration::from_millis(20));
-        }
+        };
         let mut input = Input::default();
         input.apply(&TcSettings {
             source: TcSource::Midi,
-            midi_port: name.clone(),
+            midi_port: listed.clone(),
             ..Default::default()
         });
         assert!(input.midi.is_some(), "{}", input.status());

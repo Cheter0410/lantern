@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.4
+
+- MIDI timecode on Linux: the chosen MIDI input is found again when ALSA gives it another client
+  number (after plugging it in again or a restart). The MIDI timecode test now passes on Linux too
+  (it failed the release there with "port not listed").
+
 ## 0.11.3
 
 - Stagehand is now called Showtime Suite: the install scripts put Lantern into the renamed shared folder
