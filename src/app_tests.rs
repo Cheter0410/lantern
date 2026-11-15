@@ -200,19 +200,19 @@ fn live_mode_locks_the_show() {
     }
     shots.take(&mut h, "2b-live-running-hover");
 
-    // GO- and GO+ side by side; Blackout and Clear set apart on the right.
+    // GO- and GO+ side by side; Blackout and Reset set apart on the right.
     let back = h.get_by_label("GO\u{2212}").rect();
     let go = h.get_by_label_contains("GO+").rect();
     let blackout = h.get_by_label("Blackout").rect();
-    let clear = h.get_by_label("Clear").rect();
+    let reset = h.get_by_label("Reset").rect();
     assert!(back.right() < go.left(), "GO- left of GO+");
     assert!(
         go.right() + 100.0 < blackout.left(),
         "Blackout far from GO+"
     );
     assert!(
-        blackout.right() + 24.0 < clear.left(),
-        "a clear gap between Blackout and Clear"
+        blackout.right() + 24.0 < reset.left(),
+        "a clear gap between Blackout and Reset"
     );
     h.get_by_label("GO\u{2212}").click();
     h.run_steps(3);
@@ -575,5 +575,74 @@ fn migrates_an_older_show() {
     );
     assert!(pres.is_file(), "copied: the old show is still there");
     run_until(&mut h, "the slides", |a| a.slides.len() == 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn transport_layout_never_overlaps() {
+    use super::TransportLayout as L;
+    let mut w = 240.0;
+    while w < 1800.0 {
+        let l = L::for_width(w);
+        assert!(l.go >= 100.0, "GO+ usable at {w}");
+        if l.two_rows {
+            assert!(
+                l.left_width() <= w + 0.5 && l.right_width() <= w,
+                "fits at {w}"
+            );
+        } else {
+            assert!(
+                l.left_width() + L::MIN_GAP + l.right_width() <= w + 0.5,
+                "room between GO+ and Blackout at {w}: {l:?}"
+            );
+        }
+        w += 7.0;
+    }
+    assert!(!L::for_width(1000.0).two_rows);
+    assert!(L::for_width(380.0).two_rows);
+}
+
+/// Small windows (with the slide list and the slide settings open): GO−,
+/// GO+, Blackout and Reset never run into each other.
+#[test]
+fn transport_fits_small_windows() {
+    let dir = temp_dir("smallwin");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let mut h = harness(&dir);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    for (w, ht, settings) in [
+        (1400.0, 860.0, false),
+        (1100.0, 700.0, false),
+        (1100.0, 700.0, true),
+        (900.0, 600.0, false),
+        (900.0, 600.0, true),
+    ] {
+        h.state_mut().selected = settings.then_some(0);
+        h.set_size(egui::vec2(w, ht));
+        h.run_steps(4);
+        let name = format!("t-{w}x{ht}{}", if settings { "-settings" } else { "" });
+        shots.take(&mut h, &name);
+        let r = [
+            h.get_by_label("GO\u{2212}").rect(),
+            h.get_by_label_contains("GO+").rect(),
+            h.get_by_label("Blackout").rect(),
+            h.get_by_label("Reset").rect(),
+        ];
+        for (i, a) in r.iter().enumerate() {
+            assert!(a.width() >= 60.0, "{name}: button {i} too small: {a:?}");
+            for b in &r[i + 1..] {
+                assert!(!a.intersects(*b), "{name}: {a:?} and {b:?} overlap");
+            }
+        }
+        // On one row: a real gap between GO+ and Blackout.
+        if (r[1].center().y - r[2].center().y).abs() < 1.0 {
+            assert!(
+                r[2].left() - r[1].right() >= 30.0,
+                "{name}: GO+ next to Blackout"
+            );
+        }
+        assert!(r[3].right() <= w, "{name}: Reset inside the window");
+    }
     let _ = std::fs::remove_dir_all(dir);
 }

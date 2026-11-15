@@ -38,9 +38,9 @@ const MODE_LIVE: Color32 = Color32::from_rgb(220, 38, 38);
 const MODE_EDIT: Color32 = Color32::from_rgb(37, 99, 235);
 const TC: Color32 = Color32::from_rgb(96, 165, 250);
 const DANGER: Color32 = Color32::from_rgb(239, 68, 68);
-/// Blackout and Clear: each with its own tint, so they can't be mixed up.
+/// Blackout and Reset: each with its own tint, so they can't be mixed up.
 const BLACKOUT_BG: Color32 = Color32::from_rgb(58, 20, 22);
-const CLEAR_BG: Color32 = Color32::from_rgb(52, 40, 18);
+const RESET_BG: Color32 = Color32::from_rgb(52, 40, 18);
 const AMBER: Color32 = Color32::from_rgb(255, 196, 92);
 const HOVER: Color32 = Color32::from_rgb(26, 29, 35);
 /// Background of the clock cells.
@@ -539,7 +539,7 @@ impl App {
             Command::Back => self.back(),
             Command::Slide(i) => self.goto(Some(i)),
             Command::First => self.goto(Some(0)),
-            Command::Clear => self.goto(None),
+            Command::Reset => self.goto(None),
             Command::Video(v) => self.video_command(v),
             Command::Blackout(v) => {
                 let on = v.unwrap_or(!self.player.blackout);
@@ -971,6 +971,156 @@ impl App {
         });
     }
 
+    /// GO−, GO+ on the left; Blackout and Reset far away on the right,
+    /// apart and in their own colours, so they are not hit by mistake. The
+    /// sizes come from the width (see `TransportLayout`): nothing overlaps,
+    /// and when it is too narrow Blackout and Reset go to a row of their own.
+    fn transport(&mut self, ui: &mut egui::Ui, next: Option<usize>) {
+        let l = TransportLayout::for_width(ui.available_width());
+        let h = l.height;
+        let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), h),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    add(ui)
+                },
+            );
+        };
+        row(ui, &mut |ui| {
+            if ui
+                .add_sized(
+                    [l.go_back, h],
+                    tool_button("GO\u{2212}", None, h).min_size(Vec2::new(l.go_back, h)),
+                )
+                .on_hover_text("One slide back: left arrow, Page Up")
+                .clicked()
+            {
+                self.back();
+            }
+            ui.add_space(l.gap);
+            self.go_button(ui, next, l.go, h);
+            if !l.two_rows {
+                ui.add_space(ui.available_width() - l.right_width());
+                self.blackout_reset(ui, &l);
+            }
+        });
+        if l.two_rows {
+            ui.add_space(10.0);
+            row(ui, &mut |ui| {
+                ui.add_space(ui.available_width() - l.right_width());
+                self.blackout_reset(ui, &l);
+            });
+        }
+    }
+
+    fn go_button(&mut self, ui: &mut egui::Ui, next: Option<usize>, w: f32, h: f32) {
+        let starts_video = self.go_starts_video();
+        let can_go = next.is_some() || starts_video;
+        let (r, go) = ui.allocate_exact_size(
+            Vec2::new(w, h),
+            if can_go {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let fill = match (can_go, go.hovered(), go.is_pointer_button_down_on()) {
+            (false, ..) => CARD,
+            (true, _, true) => Color32::from_rgb(21, 128, 61),
+            (true, true, _) => Color32::from_rgb(28, 180, 84),
+            _ => GO,
+        };
+        let ink = if can_go { Color32::WHITE } else { MUTED };
+        ui.painter().rect_filled(r, 8.0, fill);
+        let what: String = match next {
+            _ if starts_video => "Play video".into(),
+            Some(n) => format!("Slide {}", n + 1),
+            None => "End".into(),
+        };
+        go.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, can_go, format!("GO+ {what}"))
+        });
+        // Narrow: "GO+" in the middle, what comes under it.
+        if w >= 200.0 {
+            ui.painter().text(
+                r.left_center() + Vec2::new(18.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "GO+",
+                egui::FontId::proportional(26.0),
+                ink,
+            );
+            ui.painter().text(
+                r.right_center() - Vec2::new(16.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                what,
+                egui::FontId::proportional(14.0),
+                ink,
+            );
+        } else {
+            ui.painter().text(
+                r.center() - Vec2::new(0.0, 7.0),
+                egui::Align2::CENTER_CENTER,
+                "GO+",
+                egui::FontId::proportional(22.0),
+                ink,
+            );
+            ui.painter().text(
+                r.center() + Vec2::new(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                what,
+                egui::FontId::proportional(11.5),
+                ink,
+            );
+        }
+        if go
+            .on_hover_text("Space, right arrow, Page Down or clicker")
+            .clicked()
+        {
+            self.go();
+        }
+    }
+
+    fn blackout_reset(&mut self, ui: &mut egui::Ui, l: &TransportLayout) {
+        let h = l.height;
+        let bo = self.player.blackout;
+        if ui
+            .add_sized(
+                [l.blackout, h],
+                egui::Button::new(
+                    RichText::new(if bo { "Blackout on" } else { "Blackout" })
+                        .size(15.0)
+                        .strong()
+                        .color(if bo { Color32::WHITE } else { DANGER }),
+                )
+                .fill(if bo { DANGER } else { BLACKOUT_BG })
+                .corner_radius(8),
+            )
+            .on_hover_text("Black picture, the slide stays (key B)")
+            .clicked()
+        {
+            self.player.set_blackout(!bo);
+        }
+        // A clear gap with a line between the two.
+        ui.add_space(l.apart);
+        let (line, _) = ui.allocate_exact_size(Vec2::new(1.0, h - 14.0), Sense::hover());
+        ui.painter().rect_filled(line, 0.0, LINE);
+        ui.add_space(l.apart);
+        if ui
+            .add_sized(
+                [l.reset, h],
+                egui::Button::new(RichText::new("Reset").size(15.0).color(AMBER))
+                    .fill(RESET_BG)
+                    .corner_radius(8),
+            )
+            .on_hover_text("Ends the show: back to black before the first slide")
+            .clicked()
+        {
+            self.goto(None);
+        }
+    }
+
     fn ndi_name(&self) -> String {
         let n = self.show.output.ndi_name.trim();
         if n.is_empty() {
@@ -1289,103 +1439,7 @@ impl App {
         // The live slide's video or sound: play, pause, timeline.
         self.video_transport(ui);
         ui.add_space(14.0);
-        // Transport.
-        // GO- and GO+ on the left; Blackout and Clear far away on the right,
-        // apart and in their own colours, so they are not hit by mistake.
-        ui.horizontal(|ui| {
-            let h = 54.0;
-            if ui
-                .add(tool_button("GO\u{2212}", None, h))
-                .on_hover_text("One slide back: left arrow, Page Up")
-                .clicked()
-            {
-                self.back();
-            }
-            let starts_video = self.go_starts_video();
-            let can_go = next.is_some() || starts_video;
-            let (r, go) = ui.allocate_exact_size(
-                Vec2::new((live_w * 0.42).clamp(180.0, 320.0), h),
-                if can_go {
-                    Sense::click()
-                } else {
-                    Sense::hover()
-                },
-            );
-            let fill = match (can_go, go.hovered(), go.is_pointer_button_down_on()) {
-                (false, ..) => CARD,
-                (true, _, true) => Color32::from_rgb(21, 128, 61),
-                (true, true, _) => Color32::from_rgb(28, 180, 84),
-                _ => GO,
-            };
-            let ink = if can_go { Color32::WHITE } else { MUTED };
-            ui.painter().rect_filled(r, 8.0, fill);
-            ui.painter().text(
-                r.left_center() + Vec2::new(18.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                "GO+",
-                egui::FontId::proportional(26.0),
-                ink,
-            );
-            let what: String = match next {
-                _ if starts_video => "Play video".into(),
-                Some(n) => format!("Slide {}", n + 1),
-                None => "End".into(),
-            };
-            go.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, can_go, format!("GO+ {what}"))
-            });
-            ui.painter().text(
-                r.right_center() - Vec2::new(16.0, 0.0),
-                egui::Align2::RIGHT_CENTER,
-                what,
-                egui::FontId::proportional(14.0),
-                ink,
-            );
-            if go
-                .on_hover_text("Space, right arrow, Page Down or clicker")
-                .clicked()
-            {
-                self.go();
-            }
-
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Clear").size(15.0).color(AMBER))
-                            .fill(CLEAR_BG)
-                            .corner_radius(8)
-                            .min_size(Vec2::new(104.0, h)),
-                    )
-                    .on_hover_text("Ends the show: back to black before the first slide")
-                    .clicked()
-                {
-                    self.goto(None);
-                }
-                // A clear gap with a line between the two.
-                ui.add_space(14.0);
-                let (line, _) = ui.allocate_exact_size(Vec2::new(1.0, h - 14.0), Sense::hover());
-                ui.painter().rect_filled(line, 0.0, LINE);
-                ui.add_space(14.0);
-                let bo = self.player.blackout;
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(if bo { "Blackout on" } else { "Blackout" })
-                                .size(15.0)
-                                .strong()
-                                .color(if bo { Color32::WHITE } else { DANGER }),
-                        )
-                        .fill(if bo { DANGER } else { BLACKOUT_BG })
-                        .corner_radius(8)
-                        .min_size(Vec2::new(124.0, h)),
-                    )
-                    .on_hover_text("Black picture, the slide stays (key B)")
-                    .clicked()
-                {
-                    self.player.set_blackout(!bo);
-                }
-            });
-        });
+        self.transport(ui, next);
         ui.add_space(14.0);
         // Speaker notes of the live slide.
         let notes = self
@@ -2076,7 +2130,10 @@ impl App {
                     ("/lantern/slide <n>", "show slide n"),
                     ("/lantern/first", "first slide"),
                     ("/lantern/blackout [0|1]", "blackout (no value: toggle)"),
-                    ("/lantern/clear", "black before the first slide"),
+                    (
+                        "/lantern/reset",
+                        "black before the first slide (also /clear)",
+                    ),
                 ] {
                     ui.label(RichText::new(a).small().monospace());
                     ui.label(RichText::new(what).small().color(MUTED));
@@ -2534,6 +2591,73 @@ fn badge(
     }
     ui.painter().galley(r.min + Vec2::new(5.0, 1.5), g, fg);
     ui.interact(r, ui.scope_id().with(("badge", text)), Sense::hover())
+}
+
+/// Widths of the transport row for the space there is: full size when wide,
+/// smaller buttons when not, and Blackout / Reset on a row of their own when
+/// even that does not fit. There is always at least `min_gap` between GO+
+/// and Blackout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TransportLayout {
+    height: f32,
+    go_back: f32,
+    go: f32,
+    blackout: f32,
+    reset: f32,
+    /// Between GO− and GO+.
+    gap: f32,
+    /// On each side of the line between Blackout and Reset.
+    apart: f32,
+    two_rows: bool,
+}
+
+impl TransportLayout {
+    const MIN_GAP: f32 = 32.0;
+
+    fn right_width(&self) -> f32 {
+        self.blackout + 2.0 * self.apart + 1.0 + self.reset
+    }
+
+    #[cfg(test)]
+    fn left_width(&self) -> f32 {
+        self.go_back + self.gap + self.go
+    }
+
+    fn for_width(w: f32) -> Self {
+        let full = TransportLayout {
+            height: 54.0,
+            go_back: 104.0,
+            go: 0.0,
+            blackout: 124.0,
+            reset: 104.0,
+            gap: 8.0,
+            apart: 14.0,
+            two_rows: false,
+        };
+        let compact = TransportLayout {
+            height: 50.0,
+            go_back: 76.0,
+            go: 0.0,
+            blackout: 104.0,
+            reset: 84.0,
+            gap: 6.0,
+            apart: 10.0,
+            two_rows: false,
+        };
+        for mut l in [full, compact] {
+            let room = w - l.go_back - l.gap - l.right_width() - Self::MIN_GAP;
+            let min_go = if l.height > 52.0 { 200.0 } else { 150.0 };
+            if room >= min_go {
+                l.go = room.min(320.0).min((w * 0.42).max(min_go));
+                return l;
+            }
+        }
+        // Two rows: GO− and GO+ fill the first, Blackout and Reset the second.
+        let mut l = compact;
+        l.two_rows = true;
+        l.go = (w - l.go_back - l.gap).max(100.0);
+        l
+    }
 }
 
 /// A quiet button for the top bar and panel headers.

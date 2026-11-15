@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- GO−, GO+, Blackout and Reset keep their places in small windows: the row works out its sizes from
+  the room there is – full size when wide, smaller buttons when not, and Blackout and Reset on a row
+  of their own (still on the right) when even that does not fit. They never run into each other,
+  and there is always a gap between GO+ and Blackout.
+- *Clear* is now called *Reset* (back to black before the first slide). OSC: `/lantern/reset`;
+  `/lantern/clear` still works.
+
 ## 0.4.1
 
 - Video and sound stay together after a jump (timeline, ±10 s, back to the start): sound and clock

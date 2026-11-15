@@ -7,7 +7,7 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **PowerPoint as it looks:** LibreOffice turns the file into a PDF once (cached by file content),
   Lantern renders every slide in the output resolution. Also `.ppt`, `.odp`, `.key` and plain PDFs
   (those without LibreOffice). If LibreOffice is missing, Lantern installs it with one click.
-- **Live layout:** slide list with thumbnails, LIVE and NEXT, big GO+ and GO− (one slide back), blackout and clear (set apart on the right, in red and amber), speaker
+- **Live layout:** slide list with thumbnails, LIVE and NEXT, big GO+ and GO− (one slide back), blackout and reset (set apart on the right, in red and amber; on a row of their own in narrow windows), speaker
   notes, time on the slide, clock and timecode.
 - **Per slide:** triggered with **GO** (button, clicker, keyboard, OSC, Show Master) or at a
   **timecode keyframe**; transition as in the file, cut, or fade with its own length.
@@ -22,7 +22,7 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Frame rate:** by default the highest the display supports (Settings › Output › Frame rate), or a
   fixed rate.
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
-  `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`; for the live slide's video or sound
+  `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/reset` (or `/clear`); for the live slide's video or sound
   `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`, `/video/seek <s>`,
   `/video/skip <±s>`.
 - **On another computer:** Lantern announces itself on the network (Bonjour, `_lantern._udp`); in

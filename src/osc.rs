@@ -2,7 +2,7 @@
 //!
 //! `/lantern/go` (or `/lantern/next`), `/lantern/back`, `/lantern/slide <n>`
 //! (from 1), `/lantern/first`, `/lantern/blackout [0|1]` (no argument =
-//! toggle), `/lantern/clear` (back to black before the first slide).
+//! toggle), `/lantern/reset` (back to black before the first slide; `/clear` too).
 //! The live slide's video or sound: `/lantern/video/play`, `/video/pause`,
 //! `/video/toggle`, `/video/restart`, `/video/seek <seconds>`,
 //! `/video/skip <seconds, negative = back>`.
@@ -22,7 +22,7 @@ pub enum Command {
     Slide(usize),
     First,
     Blackout(Option<bool>),
-    Clear,
+    Reset,
     Video(VideoCmd),
 }
 
@@ -58,7 +58,7 @@ pub fn parse(addr: &str, args: &[OscType]) -> Option<Command> {
         "/go" | "/next" => Some(Command::Go),
         "/back" | "/prev" | "/previous" => Some(Command::Back),
         "/first" => Some(Command::First),
-        "/clear" => Some(Command::Clear),
+        "/reset" | "/clear" => Some(Command::Reset),
         "/slide" => {
             let n = number(args)?;
             (n >= 1.0).then(|| Command::Slide(n as usize - 1))
