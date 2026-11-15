@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- Videos inside PowerPoint slides play: in their place on the display, on the Live picture and
+  over NDI, in time with their sound. Start (as in the file, automatic, with GO) and end (hold,
+  loop, next slide) and the volume can be set per slide; GO shows *Play video* when a video waits
+  for it.
+- New Settings › Audio: output device, stereo or mono on any channel pair, sample rate, fade
+  length for the sound when the slide changes, test tone and level meter. NDI carries the sound too.
+- Live: a *Video* cell in the clock strip with the time left and the sound level; the time left
+  also shows above the Live picture.
+- The packages for macOS, Windows and Linux bring FFmpeg along (license in `FFMPEG.txt`); Settings ›
+  Program shows which FFmpeg is used, a notice tells when a video can't play.
+
 ## 0.2.0
 
 - The whole interface is in English now (buttons, settings, messages, LibreOffice and NDI

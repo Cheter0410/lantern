@@ -1,8 +1,10 @@
 //! NDI output: a sender thread that sends the output picture at the chosen
-//! frame rate, mixing transitions and blackouts itself so they stay smooth.
+//! frame rate, mixing transitions and blackouts itself so they stay smooth,
+//! and the sound of the mixer with it.
 //! The NDI runtime (from ndi.video, e.g. with NDI Tools) is loaded at run time.
 #![allow(unsafe_code)]
 
+use crate::audio::Mixer;
 use crate::deck::Image;
 use libloading::Library;
 use std::ffi::{c_char, c_void, CString};
@@ -37,6 +39,19 @@ struct VideoFrame {
     timestamp: i64,
 }
 
+/// NDIlib_audio_frame_v2_t: planar float.
+#[repr(C)]
+struct AudioFrame {
+    sample_rate: i32,
+    channels: i32,
+    samples: i32,
+    timecode: i64,
+    data: *const f32,
+    channel_stride: i32,
+    metadata: *const c_char,
+    timestamp: i64,
+}
+
 const FOURCC_RGBX: u32 = u32::from_le_bytes(*b"RGBX");
 /// NDIlib_send_timecode_synthesize
 const SYNTHESIZE: i64 = i64::MAX;
@@ -47,6 +62,7 @@ struct Api {
     _lib: Library,
     send_create: unsafe extern "C" fn(*const SendCreate) -> Handle,
     send_video: unsafe extern "C" fn(Handle, *const VideoFrame),
+    send_audio: unsafe extern "C" fn(Handle, *const AudioFrame),
     send_destroy: unsafe extern "C" fn(Handle),
 }
 
@@ -133,6 +149,7 @@ fn load() -> Result<Api, String> {
             return Ok(Api {
                 send_create: sym!(b"NDIlib_send_create\0"),
                 send_video: sym!(b"NDIlib_send_send_video_v2\0"),
+                send_audio: sym!(b"NDIlib_send_send_audio_v2\0"),
                 send_destroy: sym!(b"NDIlib_send_destroy\0"),
                 _lib: lib,
             });
@@ -152,6 +169,9 @@ pub struct Scene {
     pub black_to: f32,
     pub black_since: Instant,
     pub black_fade: f32,
+    /// Video frames over the slides: picture and pixel position.
+    pub previous_video: Option<(Image, (u32, u32))>,
+    pub current_video: Option<(Image, (u32, u32))>,
 }
 
 impl Scene {
@@ -229,7 +249,13 @@ fn api() -> Result<Arc<Api>, String> {
 }
 
 impl Sender {
-    pub fn start(name: &str, w: u32, h: u32, fps: u32) -> Result<Sender, String> {
+    pub fn start(
+        name: &str,
+        w: u32,
+        h: u32,
+        fps: u32,
+        mixer: Arc<Mixer>,
+    ) -> Result<Sender, String> {
         let api = api()?;
         let scene: Arc<Mutex<Option<Scene>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
@@ -251,12 +277,18 @@ impl Sender {
                     return;
                 }
                 let mut buf: Vec<u8> = Vec::new();
+                let mut planar: Vec<f32> = Vec::new();
                 while !stop2.load(Ordering::Relaxed) {
                     let s = scene2.lock().ok().and_then(|s| s.clone());
+                    let with = |pic: &Option<Image>, v: &Option<(Image, (u32, u32))>| match (pic, v)
+                    {
+                        (Some(p), Some((f, at))) => Some(crate::media::paste(p, f, *at)),
+                        (p, _) => p.clone(),
+                    };
                     match s {
                         Some(s) => compose(
-                            s.previous.as_ref(),
-                            s.current.as_ref(),
+                            with(&s.previous, &s.previous_video).as_ref(),
+                            with(&s.current, &s.current_video).as_ref(),
                             s.mix(),
                             s.black(),
                             w,
@@ -282,6 +314,26 @@ impl Sender {
                     // SAFETY: the frame points into `buf`, alive during the
                     // (synchronous, clocked) call.
                     unsafe { (api.send_video)(snd, &f) };
+                    // The sound mixed since the last frame, left then right.
+                    let a = mixer.take_tap();
+                    let n = a.len() / 2;
+                    if n > 0 {
+                        planar.clear();
+                        planar.extend(a.iter().step_by(2));
+                        planar.extend(a.iter().skip(1).step_by(2));
+                        let af = AudioFrame {
+                            sample_rate: mixer.rate() as i32,
+                            channels: 2,
+                            samples: n as i32,
+                            timecode: SYNTHESIZE,
+                            data: planar.as_ptr(),
+                            channel_stride: (n * 4) as i32,
+                            metadata: std::ptr::null(),
+                            timestamp: 0,
+                        };
+                        // SAFETY: the frame points into `planar`, alive during the call.
+                        unsafe { (api.send_audio)(snd, &af) };
+                    }
                 }
                 // SAFETY: created above, no longer used.
                 unsafe { (api.send_destroy)(snd) };

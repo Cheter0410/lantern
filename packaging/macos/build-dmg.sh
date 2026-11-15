@@ -33,13 +33,30 @@ for a in $ARCHS; do
   fi
 done
 
+# FFmpeg for the videos, one per architecture, joined like the program.
+FF=target/ffmpeg/mac
+fetch_ffmpeg() {
+  rm -rf "$FF" && mkdir -p "$FF"
+  local parts=()
+  for a in $ARCHS; do
+    case "$a" in arm64|aarch64) a=arm64 ;; *) a=x86_64 ;; esac
+    packaging/fetch-ffmpeg.sh "macos-$a" "$FF/$a"
+    parts+=("$FF/$a/ffmpeg")
+  done
+  lipo -create -output "$FF/ffmpeg" "${parts[@]}"
+  cp packaging/FFMPEG.txt "$FF/FFMPEG.txt"
+}
+ui_run "FFmpeg für Videos" fetch_ffmpeg
+
 DMG="dist/Lantern-$V.dmg"
-KEY="$V-$(ui_fingerprint "${BINS[@]}" packaging/macos/Info.plist assets/icon.png)"
+KEY="$V-$(ui_fingerprint "${BINS[@]}" "$FF/ffmpeg" packaging/macos/Info.plist assets/icon.png)"
 make_dmg() {
   WORK=$(mktemp -d)
   APP="$WORK/dmg/Lantern.app"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
   lipo -create -output "$APP/Contents/MacOS/lantern" "${BINS[@]}"
+  cp "$FF/ffmpeg" "$APP/Contents/MacOS/ffmpeg"
+  cp "$FF/FFMPEG.txt" "$APP/Contents/Resources/FFMPEG.txt"
   sed "s/APP_VERSION/$V/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
   ICONSET="$WORK/Lantern.iconset"
   mkdir -p "$ICONSET"

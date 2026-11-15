@@ -25,12 +25,14 @@ fi
 
 ui_run "Linux-Programm" cargo build --release --locked
 BIN=target/release/lantern
-KEY="$V-$(ui_fingerprint "$BIN")"
+ui_run "FFmpeg für Linux" packaging/fetch-ffmpeg.sh linux-x86_64 target/ffmpeg/linux-out
+KEY="$V-$(ui_fingerprint "$BIN" target/ffmpeg/linux-out/ffmpeg)"
 NAME="lantern-$V-linux-x86_64"
 TAR="dist/$NAME.tar.gz"
 make_tar() {
   rm -rf "dist/$NAME" && mkdir -p "dist/$NAME"
   cp "$BIN" README.md packaging/linux/lantern.desktop "dist/$NAME/"
+  cp target/ffmpeg/linux-out/ffmpeg target/ffmpeg/linux-out/FFMPEG.txt "dist/$NAME/"
   cp assets/icon.png "dist/$NAME/lantern.png"
   tar -C dist -czf "$TAR" "$NAME" && rm -rf "dist/$NAME"
 }
@@ -42,13 +44,15 @@ FILES+=("$TAR")
 if [ -z "${SKIP_WINDOWS:-}" ]; then
   ui_run "Windows-Programm" cargo build --release --locked --target x86_64-pc-windows-gnu
   EXE=target/x86_64-pc-windows-gnu/release/lantern.exe
-  WKEY="$V-$(ui_fingerprint "$EXE")"
+  ui_run "FFmpeg für Windows" packaging/fetch-ffmpeg.sh windows-x86_64 target/ffmpeg/windows-out
+  WKEY="$V-$(ui_fingerprint "$EXE" target/ffmpeg/windows-out/ffmpeg.exe)"
   ISCC="${ISCC:-$HOME/.wine/drive_c/InnoSetup/ISCC.exe}"
   WINE=$(command -v wine || command -v wine64 || true)
   export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
   SETUP="dist/Lantern-Setup-$V.exe"
   make_setup() {
     rm -rf stage && mkdir -p stage && cp "$EXE" README.md stage/
+    cp target/ffmpeg/windows-out/ffmpeg.exe target/ffmpeg/windows-out/FFMPEG.txt stage/
     "$WINE" "$ISCC" "/DAppVersion=$V" "Z:$(pwd)/packaging/windows/lantern.iss"
     rm -rf stage
   }

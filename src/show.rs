@@ -24,6 +24,41 @@ pub enum TransitionCfg {
     Fade(f32),
 }
 
+/// When a slide's video starts.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum VideoStart {
+    /// As set in PowerPoint (automatically or on click).
+    #[default]
+    FromFile,
+    /// As soon as the slide is on the output.
+    Auto,
+    /// With the next GO (the GO after that goes to the next slide).
+    Go,
+}
+
+/// What happens when a slide's video has played to the end.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum VideoEnd {
+    /// As set in PowerPoint (loop or stop on the last frame).
+    #[default]
+    FromFile,
+    /// Stay on the last frame.
+    Hold,
+    /// Start again.
+    Loop,
+    /// Go to the next slide.
+    Next,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct VideoCfg {
+    pub start: VideoStart,
+    pub end: VideoEnd,
+    /// 0..1; `None` = as in the presentation.
+    pub volume: Option<f32>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct SlideCfg {
@@ -33,6 +68,38 @@ pub struct SlideCfg {
     /// Keyframe `HH:MM:SS:FF`.
     pub tc: String,
     pub transition: TransitionCfg,
+    pub video: VideoCfg,
+}
+
+/// Sound out (the videos' sound).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct AudioCfg {
+    /// Off: no device is opened (NDI still gets the sound).
+    pub enabled: bool,
+    /// Output device name; empty = the system default.
+    pub device: String,
+    /// First output channel (from 0).
+    pub first_channel: u16,
+    /// Mono: left and right summed onto `first_channel` only.
+    pub mono: bool,
+    /// Hz; 0 = the device's own rate.
+    pub sample_rate: u32,
+    /// Seconds the sound fades on a slide change, blackout or clear.
+    pub fade: f32,
+}
+
+impl Default for AudioCfg {
+    fn default() -> Self {
+        AudioCfg {
+            enabled: true,
+            device: String::new(),
+            first_channel: 0,
+            mono: false,
+            sample_rate: 0,
+            fade: 1.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -135,6 +202,7 @@ pub struct Show {
     pub presentation: PathBuf,
     pub slides: Vec<SlideCfg>,
     pub output: Output,
+    pub audio: AudioCfg,
     pub timecode: TcSettings,
     /// UDP port for OSC remote control (Show Master, QLab, Companion…).
     pub osc_port: u16,
@@ -146,6 +214,7 @@ impl Default for Show {
             presentation: PathBuf::new(),
             slides: Vec::new(),
             output: Output::default(),
+            audio: AudioCfg::default(),
             timecode: TcSettings::default(),
             osc_port: 53_100,
         }
@@ -400,6 +469,7 @@ mod tests {
             notes: String::new(),
             hidden: false,
             transition: Transition::Cut,
+            video: None,
         };
         let mut show = Show::default();
         show.match_slides(&[info("A"), info("B")]);

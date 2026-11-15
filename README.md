@@ -31,7 +31,19 @@ Ctrl/⌘+E = switch between Edit and Live.
 settings, no opening, reloading or dropping files, settings only to look at. GO, back, blackout,
 timecode and OSC work as always. The mode is kept across restarts.
 
-Not yet: videos and animations inside slides (a slide shows its final state).
+**Videos in slides:** a video in a PowerPoint slide plays in its place on the display and over NDI,
+with its sound. As in the file it starts by itself or with a click; per slide it can also start
+automatically or wait for GO (the GO button then says *Play video*), and at its end hold the last
+frame, loop or go on to the next slide. Volume per video, the sound fades out with the slide
+(Settings › Audio › Fade). In Live a *Video* cell shows the time left and the sound level.
+Lantern plays videos with FFmpeg, which the packages bring along (see `packaging/FFMPEG.txt`);
+when built from source it uses an installed `ffmpeg` (e.g. `brew install ffmpeg`).
+
+**Sound (Settings › Audio):** output device, stereo or mono and on which channels (e.g. 3–4 of an
+8-channel interface), sample rate (44.1 to 96 kHz or the device's own), fade length, a test tone and
+a level meter. With NDI on, the sound goes along with the picture too.
+
+Not yet: animations inside slides (a slide shows its final state).
 
 ## Build and install
 

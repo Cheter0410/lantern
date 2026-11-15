@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 
 pub const DOWNLOAD_PAGE: &str = "https://www.libreoffice.org/download/download-libreoffice/";
 
+pub fn cache_dir() -> PathBuf {
+    cache_root()
+}
+
 fn cache_root() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)

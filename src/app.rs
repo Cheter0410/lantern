@@ -6,7 +6,7 @@ use crate::office::{self, InstallState};
 use crate::osc::{self, Command};
 use crate::pptx::{self, SlideInfo, Transition};
 use crate::show::{self, Chase, Player, Resolution, Show, TcSource, TransitionCfg, Trigger};
-use crate::{ndi, net, timecode};
+use crate::{audio, media, ndi, net, timecode};
 use egui::{
     pos2, Align, Color32, CornerRadius, Frame, Key, Layout, Margin, Rect, RichText, Sense, Stroke,
     TextureHandle, Vec2,
@@ -92,7 +92,8 @@ struct Disp {
     here: bool,
 }
 
-type Loaded = Result<(PathBuf, Option<pptx::Info>, Vec<u8>), String>;
+type Clips = Vec<(usize, Result<media::Clip, String>)>;
+type Loaded = Result<(PathBuf, Option<pptx::Info>, Vec<u8>, Clips), String>;
 
 struct Loading {
     rx: Receiver<Loaded>,
@@ -141,6 +142,19 @@ pub struct App {
     output_started: Option<Instant>,
     message: Option<(String, Instant)>,
     scroll_to_live: bool,
+    audio: audio::Output,
+    /// Prepared videos by slide.
+    clips: HashMap<usize, Result<media::Clip, String>>,
+    video: Option<video::VideoNow>,
+    /// Last frame of the slide before (for the picture transition).
+    prev_video: Option<video::Overlay>,
+    /// Videos whose sound is fading out.
+    fading: Vec<media::Playing>,
+    audio_devices: Vec<String>,
+    audio_devices_at: Instant,
+    audio_caps: Option<audio::Caps>,
+    /// Output level (decaying peak), left and right.
+    meter: [f32; 2],
 }
 
 impl App {
@@ -184,6 +198,15 @@ impl App {
             output_started: None,
             message: None,
             scroll_to_live: false,
+            audio: audio::Output::default(),
+            clips: HashMap::new(),
+            video: None,
+            prev_video: None,
+            fading: Vec::new(),
+            audio_devices: Vec::new(),
+            audio_devices_at: Instant::now() - Duration::from_secs(10),
+            audio_caps: None,
+            meter: [0.0; 2],
         };
         let start = open.or_else(|| app.settings.last.clone().filter(|p| p.exists()));
         if let Some(p) = start {
@@ -237,6 +260,7 @@ impl App {
             let mut s = Show::load(&f).unwrap_or_else(|_| Show {
                 // Outputs and inputs carry over from the show before.
                 output: self.show.output.clone(),
+                audio: self.show.audio.clone(),
                 timecode: self.show.timecode.clone(),
                 osc_port: self.show.osc_port,
                 ..Show::default()
@@ -290,7 +314,16 @@ impl App {
                     })?
                 };
                 let bytes = std::fs::read(&pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
-                Ok((path, info, bytes))
+                let clips = match &info {
+                    Some(i) => video::prepare_clips(&path, i, &|s| {
+                        if let Ok(mut g) = st.lock() {
+                            *g = s;
+                        }
+                        c.request_repaint();
+                    }),
+                    None => Vec::new(),
+                };
+                Ok((path, info, bytes, clips))
             })();
             let _ = tx.send(r);
             c.request_repaint();
@@ -304,7 +337,7 @@ impl App {
 
     fn finish_load(&mut self, r: Loaded) {
         self.loading = None;
-        let (path, info, bytes) = match r {
+        let (path, info, bytes, clips) = match r {
             Ok(v) => v,
             Err(e) => {
                 self.load_error = Some(e);
@@ -329,9 +362,17 @@ impl App {
                     notes: String::new(),
                     hidden: false,
                     transition: Transition::Cut,
+                    video: None,
                 })
                 .collect()
         };
+        self.clips = if self.slides.iter().any(|s| s.video.is_some()) {
+            clips.into_iter().collect()
+        } else {
+            HashMap::new()
+        };
+        self.video = None;
+        self.prev_video = None;
         self.show.match_slides(&self.slides);
         if self.saved.as_ref().is_some_and(|s| s.slides.is_empty()) {
             self.saved = Some(self.show.clone());
@@ -428,6 +469,10 @@ impl App {
     }
 
     fn go(&mut self) {
+        if self.go_starts_video() {
+            self.start_video();
+            return;
+        }
         if let Some(n) = self.next_index() {
             self.goto(Some(n));
         }
@@ -558,7 +603,7 @@ impl App {
             .is_some_and(|s| s.name == name && s.size == size && s.fps == o.fps);
         if !fresh {
             self.ndi = None;
-            match ndi::Sender::start(&name, size.0, size.1, o.fps) {
+            match ndi::Sender::start(&name, size.0, size.1, o.fps, self.audio.mixer.clone()) {
                 Ok(s) => {
                     self.ndi = Some(s);
                     self.ndi_error = None;
@@ -582,6 +627,12 @@ impl App {
             black_to: p.black_level(),
             black_since: Instant::now(),
             black_fade: show::BLACKOUT_FADE,
+            previous_video: self.prev_video.as_ref().map(|v| (v.image.clone(), v.at)),
+            current_video: self
+                .video
+                .as_ref()
+                .and_then(|v| v.overlay.as_ref())
+                .map(|v| (v.image.clone(), v.at)),
         };
         if let Some(s) = &self.ndi {
             s.set(scene);
@@ -714,6 +765,8 @@ impl App {
             self.tex(self.player.current).cloned(),
         );
         let (mix, black) = (self.player.mix(), self.player.black_level());
+        let (pv, cv) = self.overlays();
+        let (pv, cv) = (pv.cloned(), cv.cloned());
         let mut closed = false;
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of(("lantern-output", m)),
@@ -721,7 +774,16 @@ impl App {
             |ui, _| {
                 let rect = ui.ctx().content_rect();
                 let painter = ui.ctx().layer_painter(egui::LayerId::background());
-                paint_output(&painter, rect, prev.as_ref(), cur.as_ref(), mix, black);
+                paint_output(
+                    &painter,
+                    rect,
+                    prev.as_ref(),
+                    cur.as_ref(),
+                    mix,
+                    black,
+                    pv.as_ref(),
+                    cv.as_ref(),
+                );
                 ui.ctx().set_cursor_icon(egui::CursorIcon::None);
                 if ui.ctx().input(|i| i.viewport().close_requested()) {
                     closed = true;
@@ -1032,6 +1094,27 @@ impl App {
                     };
                     ui.label(RichText::new(what).small().color(MUTED));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if let Some((left, playing)) = self.video_left() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "video {}{}",
+                                    if playing { "-" } else { "" },
+                                    media::fmt_time(left)
+                                ))
+                                .small()
+                                .monospace()
+                                .color(if playing {
+                                    CURRENT
+                                } else {
+                                    MUTED
+                                }),
+                            )
+                            .on_hover_text(if playing {
+                                "Video: time left"
+                            } else {
+                                "Video: length (not started)"
+                            });
+                        }
                         if self.player.current.is_some() {
                             let s = self.player.since.elapsed().as_secs();
                             ui.label(
@@ -1046,6 +1129,7 @@ impl App {
                 });
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(live_w, live_w / aspect), Sense::hover());
+                let (pv, cv) = self.overlays();
                 paint_output(
                     ui.painter(),
                     r,
@@ -1053,6 +1137,8 @@ impl App {
                     self.tex(self.player.current),
                     self.player.mix(),
                     self.player.black_level(),
+                    pv,
+                    cv,
                 );
                 ui.painter().rect_stroke(
                     r,
@@ -1092,7 +1178,7 @@ impl App {
                 });
                 let (r, _) =
                     ui.allocate_exact_size(Vec2::new(next_w, next_w / aspect), Sense::hover());
-                paint_output(ui.painter(), r, None, self.tex(next), 1.0, 0.0);
+                paint_output(ui.painter(), r, None, self.tex(next), 1.0, 0.0, None, None);
                 ui.painter()
                     .rect_stroke(r, 4.0, Stroke::new(1.0, NEXT), egui::StrokeKind::Outside);
                 if next.is_none() {
@@ -1129,25 +1215,23 @@ impl App {
         // Transport.
         ui.horizontal(|ui| {
             let h = 54.0;
+            let starts_video = self.go_starts_video();
+            let can_go = next.is_some() || starts_video;
             let (r, go) = ui.allocate_exact_size(
                 Vec2::new((live_w * 0.42).clamp(180.0, 320.0), h),
-                if next.is_some() {
+                if can_go {
                     Sense::click()
                 } else {
                     Sense::hover()
                 },
             );
-            let fill = match (next.is_some(), go.hovered(), go.is_pointer_button_down_on()) {
+            let fill = match (can_go, go.hovered(), go.is_pointer_button_down_on()) {
                 (false, ..) => CARD,
                 (true, _, true) => Color32::from_rgb(21, 128, 61),
                 (true, true, _) => Color32::from_rgb(28, 180, 84),
                 _ => GO,
             };
-            let ink = if next.is_some() {
-                Color32::WHITE
-            } else {
-                MUTED
-            };
+            let ink = if can_go { Color32::WHITE } else { MUTED };
             ui.painter().rect_filled(r, 8.0, fill);
             ui.painter().text(
                 r.left_center() + Vec2::new(18.0, 0.0),
@@ -1156,13 +1240,18 @@ impl App {
                 egui::FontId::proportional(26.0),
                 ink,
             );
+            let what: String = match next {
+                _ if starts_video => "Play video".into(),
+                Some(n) => format!("Slide {}", n + 1),
+                None => "End".into(),
+            };
+            go.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, can_go, format!("GO {what}"))
+            });
             ui.painter().text(
                 r.right_center() - Vec2::new(16.0, 0.0),
                 egui::Align2::RIGHT_CENTER,
-                match next {
-                    Some(n) => format!("Slide {}", n + 1),
-                    None => "End".into(),
-                },
+                what,
                 egui::FontId::proportional(14.0),
                 ink,
             );
@@ -1229,7 +1318,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
         let gap = 8.0;
         // Timecode needs the most room.
-        let weights = [1.0, 1.4, 0.8, 0.8];
+        let weights = [1.0, 1.4, 0.8, 0.7, 0.9];
         let total: f32 = weights.iter().sum();
         let avail = rect.width() - gap * (weights.len() as f32 - 1.0);
         let mut x = rect.left();
@@ -1245,7 +1334,11 @@ impl App {
         // One digit size for all of them (calmer than four sizes).
         let digits_h = (h - 30.0) * 0.95;
         let fit = |i: usize, chars: usize| fit_digits(chars, cells[i].width() - 24.0, digits_h);
-        let size = fit(0, 8).min(fit(1, 11)).min(fit(2, 5)).min(fit(3, 7));
+        let size = fit(0, 8)
+            .min(fit(1, 11))
+            .min(fit(2, 5))
+            .min(fit(3, 7))
+            .min(fit(4, 6));
 
         clock_cell(ui, cells[0], "Time of day", &clock(), TEXT, None, size);
 
@@ -1319,6 +1412,31 @@ impl App {
             self.player.current.map(|_| CURRENT),
             size,
         );
+        // Video: time left, and the sound level along the bottom.
+        let (text, color, accent) = match self.video_left() {
+            Some((left, true)) => (format!("-{}", media::fmt_time(left)), TEXT, Some(CURRENT)),
+            Some((len, false)) => (media::fmt_time(len), MUTED, None),
+            None => ("-:--".to_string(), MUTED, None),
+        };
+        let free = clock_cell(ui, cells[4], "Video", &text, color, accent, size);
+        if self.go_starts_video() {
+            badge(
+                ui,
+                free.right(),
+                free.center().y,
+                "WAITS FOR GO",
+                true,
+                NEXT,
+            );
+        }
+        let m = Rect::from_min_max(
+            pos2(cells[4].left() + 12.0, cells[4].bottom() - 12.0),
+            pos2(cells[4].right() - 12.0, cells[4].bottom() - 5.0),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(m), |ui| {
+            video::meter(ui, self.meter, m.size())
+                .on_hover_text(format!("Sound out: {}", self.audio.status));
+        });
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
@@ -1450,6 +1568,7 @@ impl App {
             2 => TransitionCfg::Fade(secs),
             _ => TransitionCfg::FromFile,
         };
+        self.inspector_video(ui, i);
         let notes = self
             .slides
             .get(i)
@@ -1478,6 +1597,7 @@ impl App {
                 ui.horizontal(|ui| {
                     for (t, label) in [
                         (SettingsTab::Output, "Output"),
+                        (SettingsTab::Audio, "Audio"),
                         (SettingsTab::Timecode, "Timecode"),
                         (SettingsTab::Network, "Network"),
                         (SettingsTab::Program, "Program"),
@@ -1520,6 +1640,7 @@ impl App {
                             SettingsTab::Timecode => self.settings_timecode(ui),
                             SettingsTab::Network => self.settings_network(ui),
                             SettingsTab::Program => self.settings_program(ui),
+                            SettingsTab::Audio => self.settings_audio(ui),
                         });
                     });
             });
@@ -1799,6 +1920,22 @@ impl App {
                 );
             }
         }
+        ui.add_space(10.0);
+        ui.label(RichText::new("FFmpeg").strong());
+        match media::ffmpeg() {
+            Some(p) => {
+                ui.label(RichText::new("Found – plays the videos in presentations.").color(MUTED));
+                ui.label(RichText::new(p.display().to_string()).small().color(MUTED));
+            }
+            None => {
+                ui.label(
+                    RichText::new(
+                        "Not found – slides with a video show its first frame. The Lantern packages ship FFmpeg; otherwise install it (e.g. brew install ffmpeg).",
+                    )
+                    .color(AMBER),
+                );
+            }
+        }
         section(ui, "Presentation");
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
@@ -1898,6 +2035,26 @@ impl App {
                         }
                     }
                 });
+            });
+        }
+        let video_errors = self.clips.values().filter(|c| c.is_err()).count();
+        if video_errors > 0 && self.loading.is_none() {
+            let first = self
+                .clips
+                .values()
+                .find_map(|c| c.as_ref().err().cloned())
+                .unwrap_or_default();
+            banner(ui, AMBER, |ui| {
+                ui.label(
+                    RichText::new(if video_errors == 1 {
+                        "1 video can't play:".to_string()
+                    } else {
+                        format!("{video_errors} videos can't play:")
+                    })
+                    .strong()
+                    .color(AMBER),
+                );
+                ui.label(first);
             });
         }
         if self.changed_on_disk && self.loading.is_none() {
@@ -2010,6 +2167,7 @@ impl App {
 enum SettingsTab {
     #[default]
     Output,
+    Audio,
     Timecode,
     Network,
     Program,
@@ -2028,6 +2186,7 @@ fn full_uv() -> Rect {
 }
 
 /// Draw the output picture: previous slide, the current one faded over it, blackout on top.
+#[allow(clippy::too_many_arguments)]
 fn paint_output(
     p: &egui::Painter,
     rect: Rect,
@@ -2035,6 +2194,8 @@ fn paint_output(
     cur: Option<&TextureHandle>,
     mix: f32,
     black: f32,
+    prev_video: Option<&video::Overlay>,
+    cur_video: Option<&video::Overlay>,
 ) {
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     p.rect_filled(rect, 0.0, Color32::BLACK);
@@ -2051,14 +2212,29 @@ fn paint_output(
             Vec2::new(w as f32 * s, h as f32 * s),
         )
     };
+    // A video over its slide, placed in the slide picture's pixels.
+    let over = |t: &TextureHandle, v: Option<&video::Overlay>, tint: Color32| {
+        if let Some(v) = v {
+            let r = fit(t);
+            let sx = r.width() / v.of.0.max(1) as f32;
+            let sy = r.height() / v.of.1.max(1) as f32;
+            let vr = Rect::from_min_size(
+                r.min + Vec2::new(v.at.0 as f32 * sx, v.at.1 as f32 * sy),
+                Vec2::new(v.size.0 as f32 * sx, v.size.1 as f32 * sy),
+            );
+            p.image(v.tex.id(), vr, uv, tint);
+        }
+    };
     if mix < 1.0 {
         if let Some(t) = prev {
             p.image(t.id(), fit(t), uv, Color32::WHITE);
+            over(t, prev_video, Color32::WHITE);
         }
     }
     if let Some(t) = cur {
         let a = (mix.clamp(0.0, 1.0) * 255.0).round() as u8;
         p.image(t.id(), fit(t), uv, Color32::from_white_alpha(a));
+        over(t, cur_video, Color32::from_white_alpha(a));
     } else if mix < 1.0 && prev.is_some() {
         // Fading to black (cleared).
         p.rect_filled(rect, 0.0, Color32::from_black_alpha((mix * 255.0) as u8));
@@ -2373,6 +2549,14 @@ impl eframe::App for App {
         self.update_osc(&ctx);
         self.keys(&ctx);
         self.follow_timecode();
+        self.update_video(&ctx);
+        let peak = self.audio.mixer.take_peak();
+        for (m, p) in self.meter.iter_mut().zip(peak) {
+            *m = p.max(*m * 0.85);
+        }
+        if self.meter.iter().any(|m| *m > 1e-3) {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
         self.receive_pictures(&ctx);
         self.want_pictures();
         self.update_ndi();
@@ -2448,6 +2632,9 @@ impl eframe::App for App {
         }
     }
 }
+
+#[path = "app_video.rs"]
+mod video;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

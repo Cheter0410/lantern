@@ -1,0 +1,19 @@
+FFmpeg
+======
+
+Lantern ships the program "ffmpeg" (https://ffmpeg.org) next to itself and
+starts it as a separate program to play the videos in presentations. FFmpeg
+is not part of Lantern and keeps its own license:
+
+- macOS: static build from https://ffmpeg.martin-riedl.de (FFmpeg 9.0.2),
+  licensed under the GNU General Public License, version 2 or later.
+- Windows and Linux: static LGPL build from
+  https://github.com/BtbN/FFmpeg-Builds (FFmpeg 9.0), licensed under the
+  GNU Lesser General Public License, version 2.1 or later.
+
+The source code of FFmpeg is available at https://ffmpeg.org/download.html,
+the build scripts at the two addresses above. On request we send you the
+exact source code of the FFmpeg we ship.
+
+License texts: https://www.gnu.org/licenses/gpl-2.0.html and
+https://www.gnu.org/licenses/lgpl-2.1.html

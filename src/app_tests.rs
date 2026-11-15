@@ -124,6 +124,10 @@ fn run_until(h: &mut Harness<'_, App>, what: &str, done: impl Fn(&App) -> bool) 
 fn harness(dir: &Path) -> Harness<'static, App> {
     let file = dir.join("show.pdf");
     std::fs::write(&file, pdf(3)).expect("write pdf");
+    harness_for(file)
+}
+
+fn harness_for(file: PathBuf) -> Harness<'static, App> {
     let mut b = Harness::builder().with_size([1400.0, 860.0]);
     if std::env::var_os("LANTERN_SHOTS").is_some() {
         b = b.wgpu();
@@ -218,5 +222,88 @@ fn live_mode_locks_the_show() {
     assert!(h.query_by_label("Open").is_some());
     shots.take(&mut h, "4-edit-again");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plays_the_video_of_a_pptx() {
+    if crate::office::find().is_none() || crate::media::ffmpeg().is_none() {
+        eprintln!("skipped: needs LibreOffice and FFmpeg");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("lantern-video-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::env::set_var("LANTERN_CONFIG_DIR", dir.join("config"));
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    if let Some(d) = &shots.0 {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let file = dir.join("video.pptx");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/video.pptx"),
+        &file,
+    )
+    .expect("copy pptx");
+
+    let mut h = harness_for(file);
+    run_until(&mut h, "the slides and the clip", |a| {
+        a.slides.len() >= 2 && a.loading.is_none() && a.clips.contains_key(&1)
+    });
+    assert!(
+        h.state().clips[&1].is_ok(),
+        "clip ready: {:?}",
+        h.state().clips[&1].as_ref().err()
+    );
+    // Quiet tests: no sound on the real interface.
+    h.state_mut().show.audio.enabled = false;
+
+    // Edit: the video slide has its own settings.
+    click_at(&h, egui::pos2(150.0, 160.0));
+    h.run_steps(3);
+    assert_eq!(h.state().selected, Some(1));
+    assert!(h.query_by_label_contains("At the end").is_some());
+    shots.take(&mut h, "5-video-slide-settings");
+    // The file says "start after the slide"; here it waits for GO.
+    h.state_mut().selected = None;
+    let a = h.state_mut();
+    if a.show.slides.len() < 2 {
+        a.show.slides.resize_with(2, Default::default);
+    }
+    a.show.slides[1].video.start = crate::show::VideoStart::Go;
+    h.state_mut().set_live(true);
+    h.run_steps(2);
+
+    h.key_press(Key::Space);
+    h.run_steps(3);
+    h.key_press(Key::Space);
+    run_until(&mut h, "slide 2 live", |a| a.player.current == Some(1));
+    assert!(h.state().go_starts_video(), "the video waits for GO");
+    assert!(h.query_by_label_contains("Play video").is_some());
+    let (len, playing) = h.state().video_left().expect("video length");
+    assert!(!playing && len > 1.0, "length before start: {len}");
+    shots.take(&mut h, "6-video-armed");
+
+    h.key_press(Key::Space);
+    run_until(&mut h, "video frames", |a| {
+        a.video.as_ref().is_some_and(|v| v.overlay.is_some())
+    });
+    assert_eq!(h.state().player.current, Some(1), "GO played, did not skip");
+    std::thread::sleep(Duration::from_millis(600));
+    h.run_steps(3);
+    let (left, playing) = h.state().video_left().expect("time left");
+    assert!(playing && left < len, "counts down: {left} of {len}");
+    shots.take(&mut h, "7-video-playing");
+
+    // Settings › Audio.
+    h.state_mut().set_live(false);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+    h.run_steps(3);
+    h.get_by_label("Audio").click();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Sample rate").is_some());
+    shots.take(&mut h, "8-settings-audio");
+
+    drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
