@@ -35,7 +35,7 @@ DMG="dist/Lantern-$V.dmg"
 ui_section "Installieren"
 [ -n "${NO_INSTALL:-}" ] && { ui_ok "Installer: $DMG"; ui_done; exit 0; }
 STAMP=dist/.made/installed-app
-# All show tools share one folder (as Stagehand installs them).
+# All show tools share one folder (as Showtime Suite installs them).
 APPDIR=$(mac_app_dir)
 WANT=$(cat "dist/.made/$(basename "$DMG")" 2>/dev/null || echo none)
 if [ -d "$APPDIR/Lantern.app" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
@@ -49,6 +49,6 @@ else
 fi
 
 ui_section "Fertig"
-ui_ok "Lantern ist in Programme › Stagehand (Launchpad, Spotlight)"
+ui_ok "Lantern ist in Programme › Showtime Suite (Launchpad, Spotlight)"
 ui_done
 open "$APPDIR/Lantern.app"

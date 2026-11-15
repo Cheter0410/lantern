@@ -82,7 +82,7 @@ Not yet: animations inside slides (a slide shows its final state).
 
 ## Build and install
 
-Linux (no sudo: it goes into `~/.local/share/stagehand/apps`, the folder Stagehand installs all apps
+Linux (no sudo: it goes into `~/.local/share/showtime-suite/apps`, the folder Showtime Suite installs all apps
 into; run it again to update, `./install.sh --uninstall` removes it):
 
 ```bash

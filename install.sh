@@ -5,8 +5,8 @@
 #   git clone https://github.com/Cheter0410/lantern.git && cd lantern && ./install.sh
 #
 # Run it again later to update; only what is needed is done. The app goes into
-# the folder all show tools share (~/.local/share/stagehand/apps/lantern, as
-# Stagehand installs it), with a menu entry and the command "lantern".
+# the folder all show tools share (~/.local/share/showtime-suite/apps/lantern, as
+# Showtime Suite installs it), with a menu entry and the command "lantern".
 # Remove with: ./install.sh --uninstall
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,7 +18,7 @@ setup_no_root
 
 if [ "${1:-}" = "--uninstall" ]; then
   ui_header "Lantern" "Entfernen"
-  user_app_remove lantern lantern && ui_ok "Aus dem Stagehand-Ordner entfernt"
+  user_app_remove lantern lantern && ui_ok "Aus dem Showtime-Suite-Ordner entfernt"
   if system_copy_there lantern; then
     ui_sudo
     ui_run "Alte Kopie in /usr/local entfernen" system_copy_remove lantern
@@ -75,7 +75,7 @@ elif [ -n "guard" ] && pgrep -x lantern >/dev/null 2>&1; then
   ui_done
   exit 0
 else
-  ui_run "Installieren (Stagehand-Ordner)" user_app_install lantern lantern "$V" "$BIN" packaging/linux/lantern.desktop assets/icon.png
+  ui_run "Installieren (Showtime-Suite-Ordner)" user_app_install lantern lantern "$V" "$BIN" packaging/linux/lantern.desktop assets/icon.png
 fi
 # A copy an older version of this script put into /usr/local would be found first.
 if system_copy_there lantern; then

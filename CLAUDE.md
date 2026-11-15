@@ -43,7 +43,7 @@ Build output and local files: `target/`, `dist/`, `.DS_Store`, logs, editor file
 ## Releases
 
 Released files go to the public repository **`Cheter0410/lantern-releases`**. It only holds the downloads (and a
-README) – never develop there. Installed copies and Stagehand read the newest release from it.
+README) – never develop there. Installed copies and Showtime Suite read the newest release from it.
 
 `./release.sh` publishes (Arch PC: Linux + Windows, Mac: the DMG); `./release.sh status` shows what is
 up. Works like Show Master's (`show-master/docs/release-anleitung.md`).
@@ -56,10 +56,10 @@ All live side by side in `~/Desktop/dev` (folder names in lower case):
 |---|---|---|
 | `show-master` | Cheter0410/Show-Master | Cheter0410/show-master-releases |
 | `lantern` | Cheter0410/lantern | Cheter0410/lantern-releases |
-| `stagehand` | Cheter0410/stagehand | Cheter0410/stagehand-releases |
+| `showtime-suite` | Cheter0410/showtime-suite | Cheter0410/showtime-suite-releases |
 | `beamweave` | Cheter0410/beamweave | Cheter0410/beamweave-releases |
 
-Stagehand installs, updates and starts the others; its catalog is `stagehand/apps.json`.
+Showtime Suite installs, updates and starts the others; its catalog is `showtime-suite/apps.json`.
 
 ## Build and test
 
@@ -78,3 +78,4 @@ UI tests use their own settings folder – they never touch the real Lantern set
 - `crates/sm-timecode`, `sm-rtpmidi`, `sm-mdns` are copies from Show Master – a fix in one usually
   belongs in the other too.
 - Two `.DS_Store` files are tracked by mistake; leave them, don't add more.
+- `scripts/setup.sh` is the same file in Show Master, Showtime Suite and here – change all three together.
