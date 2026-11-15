@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Timecode in: MIDI timecode (MTC) on a MIDI input of this computer, e.g. the IAC bus on a Mac
+  (loopMIDI on Windows) or a USB MIDI interface. Settings › Timecode › *MTC (MIDI input)*, with the
+  input to pick; the clock strip shows "MTC". A missing input is tried again every two seconds.
+- *Back* is now *GO−*, *GO* is *GO+*; GO− sits left of GO+.
+- Blackout and Clear moved to the far right, apart from GO and from each other (with a line between),
+  Blackout in red, Clear in amber, so neither is hit by mistake.
+
 ## 0.3.0
 
 - Videos inside PowerPoint slides play: in their place on the display, on the Live picture and

@@ -38,6 +38,9 @@ const MODE_LIVE: Color32 = Color32::from_rgb(220, 38, 38);
 const MODE_EDIT: Color32 = Color32::from_rgb(37, 99, 235);
 const TC: Color32 = Color32::from_rgb(96, 165, 250);
 const DANGER: Color32 = Color32::from_rgb(239, 68, 68);
+/// Blackout and Clear: each with its own tint, so they can't be mixed up.
+const BLACKOUT_BG: Color32 = Color32::from_rgb(58, 20, 22);
+const CLEAR_BG: Color32 = Color32::from_rgb(52, 40, 18);
 const AMBER: Color32 = Color32::from_rgb(255, 196, 92);
 const HOVER: Color32 = Color32::from_rgb(26, 29, 35);
 /// Background of the clock cells.
@@ -153,6 +156,9 @@ pub struct App {
     audio_devices: Vec<String>,
     audio_devices_at: Instant,
     audio_caps: Option<audio::Caps>,
+    /// MIDI inputs (for MTC), looked up every few seconds while shown.
+    midi_ports: Vec<String>,
+    midi_ports_at: Instant,
     /// Output level (decaying peak), left and right.
     meter: [f32; 2],
 }
@@ -206,6 +212,8 @@ impl App {
             audio_devices: Vec::new(),
             audio_devices_at: Instant::now() - Duration::from_secs(10),
             audio_caps: None,
+            midi_ports: Vec::new(),
+            midi_ports_at: Instant::now() - Duration::from_secs(10),
             meter: [0.0; 2],
         };
         let start = open.or_else(|| app.settings.last.clone().filter(|p| p.exists()));
@@ -1213,8 +1221,17 @@ impl App {
         });
         ui.add_space(14.0);
         // Transport.
+        // GO- and GO+ on the left; Blackout and Clear far away on the right,
+        // apart and in their own colours, so they are not hit by mistake.
         ui.horizontal(|ui| {
             let h = 54.0;
+            if ui
+                .add(tool_button("GO\u{2212}", None, h))
+                .on_hover_text("One slide back: left arrow, Page Up")
+                .clicked()
+            {
+                self.back();
+            }
             let starts_video = self.go_starts_video();
             let can_go = next.is_some() || starts_video;
             let (r, go) = ui.allocate_exact_size(
@@ -1236,7 +1253,7 @@ impl App {
             ui.painter().text(
                 r.left_center() + Vec2::new(18.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                "GO",
+                "GO+",
                 egui::FontId::proportional(26.0),
                 ink,
             );
@@ -1246,7 +1263,7 @@ impl App {
                 None => "End".into(),
             };
             go.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, can_go, format!("GO {what}"))
+                egui::WidgetInfo::labeled(egui::Role::Button, can_go, format!("GO+ {what}"))
             });
             ui.painter().text(
                 r.right_center() - Vec2::new(16.0, 0.0),
@@ -1261,28 +1278,44 @@ impl App {
             {
                 self.go();
             }
-            if ui
-                .add(tool_button("Back", None, h))
-                .on_hover_text("Left arrow, Page Up")
-                .clicked()
-            {
-                self.back();
-            }
-            let bo = self.player.blackout;
-            if ui
-                .add(tool_button("Blackout", bo.then_some(DANGER), h))
-                .on_hover_text("Key B")
-                .clicked()
-            {
-                self.player.set_blackout(!bo);
-            }
-            if ui
-                .add(tool_button("Clear", None, h))
-                .on_hover_text("Back to black before the first slide")
-                .clicked()
-            {
-                self.goto(None);
-            }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("Clear").size(15.0).color(AMBER))
+                            .fill(CLEAR_BG)
+                            .corner_radius(8)
+                            .min_size(Vec2::new(104.0, h)),
+                    )
+                    .on_hover_text("Ends the show: back to black before the first slide")
+                    .clicked()
+                {
+                    self.goto(None);
+                }
+                // A clear gap with a line between the two.
+                ui.add_space(14.0);
+                let (line, _) = ui.allocate_exact_size(Vec2::new(1.0, h - 14.0), Sense::hover());
+                ui.painter().rect_filled(line, 0.0, LINE);
+                ui.add_space(14.0);
+                let bo = self.player.blackout;
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(if bo { "Blackout on" } else { "Blackout" })
+                                .size(15.0)
+                                .strong()
+                                .color(if bo { Color32::WHITE } else { DANGER }),
+                        )
+                        .fill(if bo { DANGER } else { BLACKOUT_BG })
+                        .corner_radius(8)
+                        .min_size(Vec2::new(124.0, h)),
+                    )
+                    .on_hover_text("Black picture, the slide stays (key B)")
+                    .clicked()
+                {
+                    self.player.set_blackout(!bo);
+                }
+            });
         });
         ui.add_space(14.0);
         // Speaker notes of the live slide.
@@ -1360,10 +1393,10 @@ impl App {
             (s, Some(r)) => (
                 format!(
                     "{} {}{}",
-                    if s == TcSource::Ltc {
-                        "LTC"
-                    } else {
-                        "RTP-MIDI"
+                    match s {
+                        TcSource::Ltc => "LTC",
+                        TcSource::Midi => "MTC",
+                        _ => "RTP-MIDI",
                     },
                     r.fps.round(),
                     if r.running { "" } else { " STOPPED" }
@@ -1747,7 +1780,8 @@ impl App {
             &[
                 (TcSource::Off, "Off"),
                 (TcSource::Ltc, "LTC (Audio)"),
-                (TcSource::RtpMidi, "MIDI timecode (network)"),
+                (TcSource::Midi, "MTC (MIDI input)"),
+                (TcSource::RtpMidi, "MTC (network)"),
             ],
         );
         ui.add_space(8.0);
@@ -1791,6 +1825,48 @@ impl App {
                         ui.add(egui::ProgressBar::new(l.min(1.0)).desired_width(220.0));
                         ui.end_row();
                     });
+            }
+            TcSource::Midi => {
+                if self.midi_ports_at.elapsed() > Duration::from_secs(2) {
+                    self.midi_ports_at = Instant::now();
+                    self.midi_ports = timecode::midi_inputs();
+                }
+                egui::Grid::new("midi")
+                    .num_columns(2)
+                    .spacing([14.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Input").color(MUTED));
+                        let shown = if t.midi_port.is_empty() {
+                            "First MIDI input".to_string()
+                        } else {
+                            t.midi_port.clone()
+                        };
+                        egui::ComboBox::from_id_salt("midiport")
+                            .width(300.0)
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut t.midi_port,
+                                    String::new(),
+                                    "First MIDI input",
+                                );
+                                for p in &self.midi_ports {
+                                    ui.selectable_value(&mut t.midi_port, p.clone(), p);
+                                }
+                            });
+                        ui.end_row();
+                    });
+                ui.add_space(6.0);
+                if self.midi_ports.is_empty() {
+                    ui.label(RichText::new("No MIDI input on this computer.").color(AMBER));
+                }
+                ui.label(
+                    RichText::new(
+                        "From a program on this Mac (Show Master, a DAW): send MTC to an IAC bus – Audio MIDI Setup › MIDI Studio › IAC Driver › \"Device is online\" – and pick that bus here. On Windows use a loopback driver such as loopMIDI.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
             }
             TcSource::RtpMidi => {
                 egui::Grid::new("rtp")
@@ -1965,8 +2041,8 @@ impl App {
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
                 for (k, what) in [
-                    ("Space · → · Page Down · Enter", "GO"),
-                    ("← · Page Up · Backspace", "Back"),
+                    ("Space · → · Page Down · Enter", "GO+ (next slide)"),
+                    ("← · Page Up · Backspace", "GO\u{2212} (slide back)"),
                     ("B", "Blackout"),
                     ("Home", "First slide"),
                     ("Esc", "Close the slide settings"),

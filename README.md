@@ -7,12 +7,13 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **PowerPoint as it looks:** LibreOffice turns the file into a PDF once (cached by file content),
   Lantern renders every slide in the output resolution. Also `.ppt`, `.odp`, `.key` and plain PDFs
   (those without LibreOffice). If LibreOffice is missing, Lantern installs it with one click.
-- **Live layout:** slide list with thumbnails, LIVE and NEXT, big GO, back, blackout, clear, speaker
+- **Live layout:** slide list with thumbnails, LIVE and NEXT, big GO+ and GO− (one slide back), blackout and clear (set apart on the right, in red and amber), speaker
   notes, time on the slide, clock and timecode.
 - **Per slide:** triggered with **GO** (button, clicker, keyboard, OSC, Show Master) or at a
   **timecode keyframe**; transition as in the file, cut, or fade with its own length.
-- **Timecode in:** LTC on any audio input, MIDI timecode over RTP-MIDI (Bonjour, so Show Master and
-  Macs find the session "Lantern"). Jumps back locate to the right slide.
+- **Timecode in:** LTC on any audio input, MIDI timecode (MTC) on a MIDI input of this computer
+  (e.g. the IAC bus on a Mac, loopMIDI on Windows, or a USB interface), or MTC over RTP-MIDI (Bonjour,
+  so Show Master and Macs find the session "Lantern"). Jumps back locate to the right slide.
 - **Outputs:** full-screen on any display (pure picture: no cursor, no symbols, no menus) and NDI
   (needs the NDI runtime, e.g. with NDI Tools from ndi.video).
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
@@ -23,7 +24,7 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - The settings of a presentation are kept next to it (`talk.pptx` → `talk.lantern`); a changed
   presentation is noticed and can be reloaded without losing them.
 
-Keys: Space, →, ↓, Page Down, Enter, N = GO · ←, ↑, Page Up, Backspace, P = back · B or . = blackout ·
+Keys: Space, →, ↓, Page Down, Enter, N = GO+ · ←, ↑, Page Up, Backspace, P = GO− · B or . = blackout ·
 Home = first slide · Esc = close the slide settings · Ctrl/⌘+O = open · Ctrl/⌘+R = read the file again ·
 Ctrl/⌘+E = switch between Edit and Live.
 

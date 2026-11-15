@@ -200,6 +200,34 @@ fn live_mode_locks_the_show() {
     }
     shots.take(&mut h, "2b-live-running-hover");
 
+    // GO- and GO+ side by side; Blackout and Clear set apart on the right.
+    let back = h.get_by_label("GO\u{2212}").rect();
+    let go = h.get_by_label_contains("GO+").rect();
+    let blackout = h.get_by_label("Blackout").rect();
+    let clear = h.get_by_label("Clear").rect();
+    assert!(back.right() < go.left(), "GO- left of GO+");
+    assert!(
+        go.right() + 100.0 < blackout.left(),
+        "Blackout far from GO+"
+    );
+    assert!(
+        blackout.right() + 24.0 < clear.left(),
+        "a clear gap between Blackout and Clear"
+    );
+    h.get_by_label("GO\u{2212}").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().player.current,
+        Some(0),
+        "GO- at the first slide stays"
+    );
+    h.get_by_label_contains("GO+").click();
+    h.run_steps(3);
+    assert_eq!(h.state().player.current, Some(1), "GO+ goes on");
+    h.get_by_label("GO\u{2212}").click();
+    h.run_steps(3);
+    assert_eq!(h.state().player.current, Some(0), "GO- goes back");
+
     // Live: the settings can be looked at, not changed.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
     h.run_steps(3);
@@ -303,6 +331,15 @@ fn plays_the_video_of_a_pptx() {
     h.run_steps(3);
     assert!(h.query_by_label_contains("Sample rate").is_some());
     shots.take(&mut h, "8-settings-audio");
+
+    // Settings › Timecode: MTC from a MIDI input of this computer.
+    h.get_by_label("Timecode").click();
+    h.run_steps(3);
+    h.get_by_label("MTC (MIDI input)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().show.timecode.source, crate::show::TcSource::Midi);
+    assert!(h.query_all_by_label_contains("IAC").next().is_some());
+    shots.take(&mut h, "9-settings-mtc");
 
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);

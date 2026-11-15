@@ -168,6 +168,8 @@ pub enum TcSource {
     Ltc,
     /// MIDI timecode over the network (RTP-MIDI / AppleMIDI).
     RtpMidi,
+    /// MIDI timecode on a MIDI input of this computer (IAC bus, USB interface).
+    Midi,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -181,6 +183,8 @@ pub struct TcSettings {
     /// Name of Lantern's RTP-MIDI session on the network.
     pub rtp_name: String,
     pub rtp_port: u16,
+    /// MIDI input carrying MTC (empty = the first one).
+    pub midi_port: String,
 }
 
 impl Default for TcSettings {
@@ -191,6 +195,7 @@ impl Default for TcSettings {
             ltc_channel: 0,
             rtp_name: "Lantern".into(),
             rtp_port: 5008,
+            midi_port: String::new(),
         }
     }
 }
