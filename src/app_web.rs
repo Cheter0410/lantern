@@ -20,6 +20,9 @@ fn hex(c: Color32) -> String {
 
 impl App {
     pub(super) fn update_web(&mut self, ctx: &egui::Context) {
+        while let Ok(c) = self.web_rx.try_recv() {
+            self.command_from(logui::Origin::Web, c);
+        }
         let cfg = self.show.web.clone();
         if !cfg.enabled {
             self.web.server = None;
@@ -32,7 +35,7 @@ impl App {
         if running != Some(wanted) && self.web.error.as_ref().is_none_or(|(p, _)| *p != cfg.port) {
             self.web.server = None;
             let c = ctx.clone();
-            match web::Server::start(cfg.port, self.osc_tx.clone(), move || c.request_repaint()) {
+            match web::Server::start(cfg.port, self.web_tx.clone(), move || c.request_repaint()) {
                 Ok(s) => {
                     self.web.server = Some(s);
                     self.web.error = None;

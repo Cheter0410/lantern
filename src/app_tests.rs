@@ -942,3 +942,94 @@ fn web_remote_demo() {
         std::thread::sleep(Duration::from_millis(30));
     }
 }
+
+/// The show log writes down each cue with who sent it, blackout, the stage,
+/// problems and when they went away, and notes – in the panel and in the
+/// show folder.
+#[test]
+fn show_log_records_the_show() {
+    use crate::showlog::Kind;
+    let dir = temp_dir("log");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let (mut h, port) = web_harness(&dir);
+    assert!(
+        h.query_by_label("Log").is_some(),
+        "the button in the top bar"
+    );
+    h.get_by_label("Log").click();
+    h.run_steps(3);
+    assert!(h.state().log.open);
+    assert!(h.query_by_label("Show log").is_some());
+
+    h.state_mut().go();
+    run_until(&mut h, "GO here", |a| a.player.current == Some(0));
+    http(port, "POST", "/api/go", "", "");
+    run_until(&mut h, "GO from the phone", |a| a.player.current == Some(1));
+    h.state_mut().set_live(true);
+    http(port, "POST", "/api/blackout", "", "");
+    run_until(&mut h, "blackout", |a| a.player.blackout);
+    http(port, "POST", "/api/blackout", "", "");
+    run_until(&mut h, "blackout off", |a| !a.player.blackout);
+    http(port, "POST", "/api/message", "", "Wrap up please");
+    run_until(&mut h, "the stage message", |a| a.stage.message.is_some());
+    // A problem, and gone again.
+    h.state_mut().show.output.display = Some(4);
+    std::thread::sleep(Duration::from_millis(550));
+    h.run_steps(3);
+    h.state_mut().show.output.display = None;
+    h.state_mut().show.output.ndi = false;
+    std::thread::sleep(Duration::from_millis(550));
+    h.run_steps(3);
+    h.state_mut().show.output.display = Some(0);
+    std::thread::sleep(Duration::from_millis(550));
+    h.run_steps(3);
+    // A note, typed in.
+    h.state_mut().log.draft = "Mic 3 dropped out".into();
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(3);
+    shots.take(&mut h, "l1-log");
+
+    let texts: Vec<String> = h
+        .state()
+        .log
+        .log
+        .entries
+        .iter()
+        .map(|e| e.text.clone())
+        .collect();
+    let has = |t: &str| texts.iter().any(|e| e.contains(t));
+    assert!(has("opened"), "{texts:?}");
+    assert!(has("Slide 1 – GO"), "{texts:?}");
+    assert!(has("Slide 2 · Agenda – GO via web remote"), "{texts:?}");
+    assert!(has("Live mode on"), "{texts:?}");
+    assert!(has("Blackout on via web remote"), "{texts:?}");
+    assert!(has("Blackout off via web remote"), "{texts:?}");
+    assert!(
+        has("Stage message: \"Wrap up please\" via web remote"),
+        "{texts:?}"
+    );
+    assert!(has("Display 5 is not connected"), "{texts:?}");
+    assert!(has("Fixed: Display 5 is not connected"), "{texts:?}");
+    assert!(has("Mic 3 dropped out"), "{texts:?}");
+    assert_eq!(h.state().log.log.count(Kind::Cue), 2, "{texts:?}");
+    assert!(h.state().log.draft.is_empty());
+
+    // In the show folder, for the report afterwards.
+    let file = h.state().log.log.file().expect("a file").to_path_buf();
+    assert!(file.starts_with(&dir) && file.parent().expect("folder").ends_with("Logs"));
+    let text = std::fs::read_to_string(&file).expect("written");
+    assert!(
+        text.contains("CUE      Slide 2 · Agenda – GO via web remote"),
+        "{text}"
+    );
+    assert!(text.contains("NOTE     Mic 3 dropped out"), "{text}");
+
+    // Filter: problems only.
+    h.state_mut().log.filter = super::logui::Filter::Problems;
+    h.run_steps(3);
+    assert!(h.query_by_label("Mic 3 dropped out").is_none());
+    assert!(h.query_by_label("Display 5 is not connected").is_some());
+    shots.take(&mut h, "l2-problems");
+    let _ = std::fs::remove_dir_all(dir);
+}

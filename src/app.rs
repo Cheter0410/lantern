@@ -154,6 +154,9 @@ pub struct App {
     osc_error: Option<(u16, String)>,
     osc_tx: Sender<Command>,
     osc_rx: Receiver<Command>,
+    /// Commands from the web remote (apart, so the log can say so).
+    web_tx: Sender<Command>,
+    web_rx: Receiver<Command>,
     ndi: Option<ndi::Sender>,
     ndi_error: Option<String>,
     selected: Option<usize>,
@@ -195,12 +198,15 @@ pub struct App {
     stage: stagewin::StageNow,
     /// The web remote's server.
     web: webui::WebUi,
+    /// The show log.
+    log: logui::LogUi,
 }
 
 impl App {
     pub fn new(ctx: &egui::Context, open: Option<PathBuf>) -> Self {
         style(ctx);
         let (osc_tx, osc_rx) = channel();
+        let (web_tx, web_rx) = channel();
         let settings = Settings::load();
         let mut app = App {
             settings,
@@ -224,6 +230,8 @@ impl App {
             osc_error: None,
             osc_tx,
             osc_rx,
+            web_tx,
+            web_rx,
             ndi: None,
             ndi_error: None,
             selected: None,
@@ -255,6 +263,7 @@ impl App {
             health: health::HealthUi::default(),
             stage: stagewin::StageNow::default(),
             web: webui::WebUi::default(),
+            log: logui::LogUi::default(),
         };
         // A file given to open: straight to it. Otherwise the start screen.
         if let Some(p) = open {
@@ -549,14 +558,14 @@ impl App {
             return;
         }
         if let Some(n) = self.next_index() {
-            self.goto(Some(n));
+            self.goto_by(Some(n), logui::Why::Go);
         }
     }
 
     fn back(&mut self) {
         if let Some(c) = self.player.current {
             if c > 0 {
-                self.goto(Some(c - 1));
+                self.goto_by(Some(c - 1), logui::Why::Back);
             }
         }
     }
@@ -565,9 +574,9 @@ impl App {
         match c {
             Command::Go => self.go(),
             Command::Back => self.back(),
-            Command::Slide(i) => self.goto(Some(i)),
-            Command::First => self.goto(Some(0)),
-            Command::Reset => self.goto(None),
+            Command::Slide(i) => self.goto_by(Some(i), logui::Why::Jump),
+            Command::First => self.goto_by(Some(0), logui::Why::First),
+            Command::Reset => self.goto_by(None, logui::Why::Reset),
             Command::Video(v) => self.video_command(v),
             Command::Stage(c) => self.stage_command(c),
             Command::Blackout(v) => {
@@ -656,7 +665,7 @@ impl App {
             .collect();
         if let Some(i) = self.chase.update(r.secs, &keys) {
             if Some(i) != self.player.current {
-                self.goto(Some(i));
+                self.goto_by(Some(i), logui::Why::Timecode);
             }
         }
     }
@@ -735,7 +744,7 @@ impl App {
             }
         }
         while let Ok(c) = self.osc_rx.try_recv() {
-            self.command(c);
+            self.command_from(logui::Origin::Osc, c);
         }
     }
 
@@ -773,6 +782,9 @@ impl App {
         if mode {
             self.set_live(!self.live());
         }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::L)) {
+            self.log.open = !self.log.open;
+        }
         // K: play / pause the live slide's video or sound.
         if ctx.input(|i| i.key_pressed(Key::K) && !i.modifiers.command) {
             self.video_command(osc::VideoCmd::Toggle);
@@ -800,7 +812,7 @@ impl App {
             self.player.set_blackout(on);
         }
         if first {
-            self.goto(Some(0));
+            self.goto_by(Some(0), logui::Why::First);
         }
         if open && !self.live() {
             self.pick_file(ctx);
@@ -927,6 +939,7 @@ impl App {
                 {
                     self.settings_open = !self.settings_open;
                 }
+                self.log_button(ui);
                 if !self.live()
                     && ui
                         .add(flat_button("Shows"))
@@ -1146,7 +1159,7 @@ impl App {
             .on_hover_text("Ends the show: back to black before the first slide")
             .clicked()
         {
-            self.goto(None);
+            self.goto_by(None, logui::Why::Reset);
         }
     }
 
@@ -1309,7 +1322,7 @@ impl App {
             };
         }
         if let Some(i) = double {
-            self.goto(Some(i));
+            self.goto_by(Some(i), logui::Why::Clicked);
         }
     }
 
@@ -1692,7 +1705,7 @@ impl App {
             .on_hover_text("Also: double-click in the list")
             .clicked()
         {
-            self.goto(Some(i));
+            self.goto_by(Some(i), logui::Why::Clicked);
         }
         let cfg = &mut self.show.slides[i];
         section(ui, "Trigger");
@@ -2391,7 +2404,8 @@ impl App {
         }
         let alpha = ((4.0 - age) / 0.5).clamp(0.0, 1.0);
         egui::Area::new(egui::Id::unique("toast"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+            // Bottom centre: clear of the side panels (the log's note field).
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -24.0])
             .interactable(false)
             .show(ctx, |ui| {
                 ui.set_opacity(alpha);
@@ -2401,7 +2415,7 @@ impl App {
                     .corner_radius(CornerRadius::same(8))
                     .inner_margin(Margin::symmetric(14, 10))
                     .show(ui, |ui| {
-                        ui.label(m);
+                        ui.add(egui::Label::new(m).wrap_mode(egui::TextWrapMode::Extend));
                     });
             });
         ctx.request_repaint_after(Duration::from_millis(100));
@@ -2963,6 +2977,9 @@ impl eframe::App for App {
                 self.toast(&ctx);
             }
         }
+        if self.screen == start::Screen::Main {
+            self.update_log();
+        }
         if self.player.animating() {
             ctx.request_repaint();
         } else {
@@ -3012,16 +3029,24 @@ impl App {
                 .min_size(220.0)
                 .resizable(true)
                 .show(ui, |ui| self.slide_list(ui));
-            if self.selected.is_some() && !self.live() {
-                egui::Panel::right("inspector")
-                    .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
-                    .default_size(290.0)
-                    .min_size(250.0)
-                    .resizable(true)
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
-                    });
-            }
+        }
+        if self.log.open {
+            egui::Panel::right("log")
+                .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(12)))
+                .default_size(330.0)
+                .min_size(260.0)
+                .resizable(true)
+                .show(ui, |ui| self.log_panel(ui));
+        }
+        if self.deck.is_some() && self.selected.is_some() && !self.live() {
+            egui::Panel::right("inspector")
+                .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
+                .default_size(290.0)
+                .min_size(250.0)
+                .resizable(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+                });
         }
         egui::CentralPanel::default()
             .frame(Frame::new().fill(BG).inner_margin(Margin::same(18)))
@@ -3042,6 +3067,8 @@ impl App {
 
 #[path = "app_health.rs"]
 mod health;
+#[path = "app_log.rs"]
+mod logui;
 #[path = "app_stage.rs"]
 mod stagewin;
 #[path = "app_start.rs"]

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+- Show log (*Log* in the top bar, Ctrl/Cmd+L): every cue with the time of day, the timecode when it
+  runs, and how it came (GO, GO−, clicked, on timecode, via OSC, via web remote); blackout on and
+  off, videos started, paused and ended, stage messages and the countdown, Live on and off, each
+  problem from output health and when it was fixed. Filter for cues, problems or notes.
+- Notes for the log: type in the field at the bottom of the panel and press Enter – also in Live.
+- Written as it happens to `Logs/<date>.txt` in the show folder (one file per day, added to when
+  the show is opened again), for the report after the show. *Copy* puts the whole log on the
+  clipboard, *File* opens it.
+- Messages at the bottom of the window are in the middle now and don't wrap.
+
 ## 0.8.0
 
 - Web remote (Settings › Network › Web remote): run the show from a phone or tablet in the same
