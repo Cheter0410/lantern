@@ -20,6 +20,7 @@ pub enum Area {
     Output,
     Audio,
     Timecode,
+    Stage,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +69,8 @@ pub struct Facts {
     pub audio_status: String,
     /// The show has videos or sounds with sound.
     pub sound_in_show: bool,
+    /// Stage display chosen.
+    pub stage_display: Option<usize>,
 }
 
 /// Timecode standing longer than this is a problem.
@@ -109,6 +112,25 @@ pub fn check(f: &Facts) -> Vec<Issue> {
             "No output".into(),
             "Neither a display nor NDI is on – the slides go nowhere.".into(),
             Area::Output,
+        ),
+        _ => {}
+    }
+    match f.stage_display {
+        Some(d) if d >= f.displays => add(
+            "stage-missing",
+            Level::Warn,
+            format!("Stage display {} is not connected", d + 1),
+            "The stage display does not show. Plug it in again or choose another display.".into(),
+            Area::Stage,
+        ),
+        Some(d) if f.display == Some(d) => add(
+            "stage-on-output",
+            Level::Error,
+            "Stage display on the output".into(),
+            "The stage display and the output are on the same display – the audience would \
+             see the notes. Choose another display for one of them."
+                .into(),
+            Area::Stage,
         ),
         _ => {}
     }
@@ -259,6 +281,7 @@ mod tests {
             audio_disconnected: false,
             audio_status: String::new(),
             sound_in_show: true,
+            stage_display: None,
         }
     }
 
@@ -318,6 +341,25 @@ mod tests {
             ..fine()
         };
         assert_eq!(keys(&f), ["ndi-error"]);
+    }
+
+    #[test]
+    fn stage_display() {
+        let f = Facts {
+            stage_display: Some(1),
+            ..fine()
+        };
+        assert_eq!(keys(&f), ["stage-on-output"]);
+        let f = Facts {
+            stage_display: Some(4),
+            ..fine()
+        };
+        assert_eq!(keys(&f), ["stage-missing"]);
+        let f = Facts {
+            stage_display: Some(0),
+            ..fine()
+        };
+        assert!(keys(&f).is_empty());
     }
 
     #[test]

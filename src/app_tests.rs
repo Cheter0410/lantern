@@ -723,3 +723,88 @@ fn output_problems_show_in_the_top_bar() {
     shots.take(&mut h, "h3-fixed");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The stage display: message and countdown from under the notes (also in
+/// Live) and over OSC; the picture for the stage with notes, now and next.
+#[test]
+fn stage_display_shows_message_countdown_and_notes() {
+    use crate::osc::StageCmd;
+    let dir = temp_dir("stage");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let mut h = harness(&dir);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    {
+        let a = h.state_mut();
+        a.slides[0].notes =
+            "Welcome everyone – thank the sponsors.\n\nIntroduce the first speaker: \
+                             Dr. Jane Miller, head of research. Keep it under a minute."
+                .into();
+        a.slides[1].title = "Agenda".into();
+        a.show.stage.display = Some(1);
+        a.show.stage.timer_minutes = 20;
+    }
+    h.key_press(Key::Space);
+    run_until(&mut h, "the pictures", |a| {
+        a.fulls.contains_key(&0) && a.fulls.contains_key(&1)
+    });
+    assert!(
+        h.query_by_label("Message to the stage…").is_some() || h.query_by_label("Send").is_some(),
+        "stage controls under the notes"
+    );
+
+    // Live: the message and the countdown still work.
+    h.state_mut().set_live(true);
+    h.state_mut().stage.draft = "5 minutes left – please wrap up".into();
+    h.run_steps(2);
+    h.get_by_label("Send").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().stage.message.as_ref().map(|m| m.text.as_str()),
+        Some("5 minutes left – please wrap up")
+    );
+    assert!(h.state().stage.draft.is_empty());
+    h.get_by_label("Start").click();
+    h.run_steps(3);
+    assert!(h.state().stage.timer.running());
+    assert_eq!(h.state().stage.timer.length, 20.0 * 60.0);
+    shots.take(&mut h, "st1-controls-live");
+
+    // The stage picture, full size.
+    h.state_mut().stage.preview = true;
+    h.set_size(egui::vec2(1920.0, 1080.0));
+    std::thread::sleep(Duration::from_millis(1100));
+    h.run_steps(4);
+    shots.take(&mut h, "st2-stage");
+    h.state_mut().stage.message = None;
+    h.state_mut().show.stage.next = false;
+    h.run_steps(3);
+    shots.take(&mut h, "st3-stage-no-next");
+    h.state_mut().stage.preview = false;
+    h.state_mut().show.stage.next = true;
+    h.set_size(egui::vec2(1400.0, 860.0));
+
+    // Over OSC (Show Master, Companion).
+    let a = h.state_mut();
+    a.stage_command(StageCmd::Message("Mic 2 is off".into()));
+    assert_eq!(
+        a.stage.message.as_ref().map(|m| m.text.as_str()),
+        Some("Mic 2 is off")
+    );
+    a.stage_command(StageCmd::ClearMessage);
+    assert!(a.stage.message.is_none());
+    a.stage_command(StageCmd::TimerPause);
+    assert!(!a.stage.timer.running());
+    a.stage_command(StageCmd::TimerReset(Some(45)));
+    assert_eq!(a.stage.timer.remaining(), 45.0 * 60.0);
+    assert_eq!(a.show.stage.timer_minutes, 45);
+
+    // Settings › Stage with its preview.
+    a.set_live(false);
+    a.settings_open = true;
+    a.settings_tab = super::SettingsTab::Stage;
+    h.run_steps(4);
+    assert!(h.query_by_label("Notes size").is_some());
+    shots.take(&mut h, "st4-settings");
+    let _ = std::fs::remove_dir_all(dir);
+}

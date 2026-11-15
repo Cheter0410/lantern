@@ -15,7 +15,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Go,
     Back,
@@ -24,6 +24,19 @@ pub enum Command {
     Blackout(Option<bool>),
     Reset,
     Video(VideoCmd),
+    Stage(StageCmd),
+}
+
+/// The stage display's message and countdown.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StageCmd {
+    Message(String),
+    ClearMessage,
+    TimerStart,
+    TimerPause,
+    TimerToggle,
+    /// Back to the length (or to this many minutes).
+    TimerReset(Option<u32>),
 }
 
 /// Transport of the live slide's video (or sound).
@@ -37,6 +50,19 @@ pub enum VideoCmd {
     Seek(f64),
     /// By this many seconds (negative: back).
     Skip(f64),
+}
+
+/// All arguments as text, joined by spaces.
+fn text(args: &[OscType]) -> String {
+    args.iter()
+        .filter_map(|a| match a {
+            OscType::String(s) => Some(s.clone()),
+            OscType::Int(i) => Some(i.to_string()),
+            OscType::Float(f) => Some(f.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn number(args: &[OscType]) -> Option<f64> {
@@ -70,6 +96,21 @@ pub fn parse(addr: &str, args: &[OscType]) -> Option<Command> {
         "/video/restart" => Some(Command::Video(VideoCmd::Restart)),
         "/video/seek" => Some(Command::Video(VideoCmd::Seek(number(args)?.max(0.0)))),
         "/video/skip" => Some(Command::Video(VideoCmd::Skip(number(args)?))),
+        "/stage/message" | "/message" => {
+            let t = text(args);
+            Some(Command::Stage(if t.trim().is_empty() {
+                StageCmd::ClearMessage
+            } else {
+                StageCmd::Message(t)
+            }))
+        }
+        "/stage/clear" => Some(Command::Stage(StageCmd::ClearMessage)),
+        "/timer/start" => Some(Command::Stage(StageCmd::TimerStart)),
+        "/timer/pause" | "/timer/stop" => Some(Command::Stage(StageCmd::TimerPause)),
+        "/timer" | "/timer/toggle" => Some(Command::Stage(StageCmd::TimerToggle)),
+        "/timer/reset" => Some(Command::Stage(StageCmd::TimerReset(
+            number(args).filter(|m| *m >= 1.0).map(|m| m as u32),
+        ))),
         _ => {
             // `/lantern/slide/3`
             let n = a.strip_prefix("/slide/")?.parse::<usize>().ok()?;
@@ -169,6 +210,25 @@ mod tests {
             Some(Command::Slide(1))
         );
         assert_eq!(parse("/lantern/slide/5", &[]), Some(Command::Slide(4)));
+        assert_eq!(
+            parse(
+                "/lantern/stage/message",
+                &[OscType::String("Wrap up".into())]
+            ),
+            Some(Command::Stage(StageCmd::Message("Wrap up".into())))
+        );
+        assert_eq!(
+            parse("/lantern/stage/message", &[]),
+            Some(Command::Stage(StageCmd::ClearMessage))
+        );
+        assert_eq!(
+            parse("/lantern/timer/reset", &[OscType::Int(20)]),
+            Some(Command::Stage(StageCmd::TimerReset(Some(20))))
+        );
+        assert_eq!(
+            parse("/lantern/timer/start", &[]),
+            Some(Command::Stage(StageCmd::TimerStart))
+        );
         assert_eq!(parse("/lantern/slide", &[OscType::Int(0)]), None);
         assert_eq!(
             parse("/lantern/blackout", &[]),

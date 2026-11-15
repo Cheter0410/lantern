@@ -19,6 +19,10 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Test picture:** Settings › Output switches the outputs to a moving test picture in their own
   resolution (geometry, cropping, levels, sharpness, frame counter, clock, timecode, dropped frames
   and delay, smooth motion for judder and tearing); the top bar shows it is on air and turns it off.
+- **Stage display:** for the speaker or stage manager on a display of its own (Settings › Stage):
+  time, slide, timecode and a countdown, a message from the operator, the slide now and next, and
+  the notes in large type. Messages and the countdown are set under the notes (also in Live) or
+  over OSC.
 - **Output health:** a badge in the top bar when something is wrong – display not connected or
   covering the Lantern window, no output, NDI not sending or without a receiver, timecode missing or
   stopped, sound device gone – with what to do and a way to the settings. A sound device that is
@@ -28,7 +32,8 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
   `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/reset` (or `/clear`); for the live slide's video or sound
   `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`, `/video/seek <s>`,
-  `/video/skip <±s>`.
+  `/video/skip <±s>`; for the stage display `/lantern/stage/message "text"`, `/stage/clear`,
+  `/lantern/timer/start`, `/timer/pause`, `/timer/toggle`, `/timer/reset [minutes]`.
 - **On another computer:** Lantern announces itself on the network (Bonjour, `_lantern._udp`); in
   Show Master the Lantern cue lists it under *Network*. Settings › Network shows the name and the IP
   address. Timecode comes over the network too (RTP-MIDI), or as LTC by cable.

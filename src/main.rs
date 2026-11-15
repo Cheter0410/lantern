@@ -17,6 +17,7 @@ mod platform;
 mod pptx;
 mod show;
 mod showfolder;
+mod stage;
 mod terminal;
 mod testpattern;
 mod timecode;

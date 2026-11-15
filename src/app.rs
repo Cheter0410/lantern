@@ -191,6 +191,8 @@ pub struct App {
     start: start::StartState,
     /// Output health: problems with the outputs and inputs.
     health: health::HealthUi,
+    /// The stage display's countdown and message.
+    stage: stagewin::StageNow,
 }
 
 impl App {
@@ -249,6 +251,7 @@ impl App {
             screen: start::Screen::Start,
             start: start::StartState::default(),
             health: health::HealthUi::default(),
+            stage: stagewin::StageNow::default(),
         };
         // A file given to open: straight to it. Otherwise the start screen.
         if let Some(p) = open {
@@ -563,6 +566,7 @@ impl App {
             Command::First => self.goto(Some(0)),
             Command::Reset => self.goto(None),
             Command::Video(v) => self.video_command(v),
+            Command::Stage(c) => self.stage_command(c),
             Command::Blackout(v) => {
                 let on = v.unwrap_or(!self.player.blackout);
                 self.player.set_blackout(on);
@@ -1318,8 +1322,18 @@ impl App {
             w as f32 / h as f32
         };
         let gap = 16.0;
-        // Live big, next smaller beside it; together at most about half the height.
-        let max_h = (avail.y * 0.5).max(120.0);
+        // Live big, next smaller beside it; together at most about half the
+        // height, and never so big that the rows below (video bar, GO, notes,
+        // the stage row) are pushed out of the window.
+        let below = 60.0
+            + 70.0
+            + 110.0
+            + if self.show.stage.display.is_some() {
+                72.0
+            } else {
+                0.0
+            };
+        let max_h = (avail.y * 0.5).min(avail.y - below - 30.0).max(120.0);
         let live_w = ((avail.x - gap) * 0.64).min(max_h * aspect).max(160.0);
         let next_w = ((avail.x - gap) * 0.36).min(live_w * 0.62).max(100.0);
         let total = self.slides.len();
@@ -1464,6 +1478,7 @@ impl App {
         self.transport(ui, next);
         ui.add_space(14.0);
         // Speaker notes of the live slide.
+        let stage_on = self.show.stage.display.is_some();
         let notes = self
             .player
             .current
@@ -1476,10 +1491,13 @@ impl App {
             .inner_margin(Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.set_min_height((ui.available_height() - 28.0).max(40.0));
+                let stage_row = if stage_on { 72.0 } else { 0.0 };
+                ui.set_min_height((ui.available_height() - 28.0 - stage_row).max(40.0));
                 ui.label(RichText::new("NOTES").small().strong().color(MUTED));
                 ui.add_space(4.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                // Leave room for the stage row below.
+                let max = (ui.available_height() - stage_row - 14.0).max(24.0);
+                egui::ScrollArea::vertical().max_height(max).show(ui, |ui| {
                     if notes.is_empty() {
                         ui.label(RichText::new("No notes on this slide").color(MUTED));
                     } else {
@@ -1487,6 +1505,10 @@ impl App {
                     }
                 });
             });
+        if stage_on {
+            ui.add_space(8.0);
+            self.stage_controls(ui);
+        }
     }
 
     /// Live: big clocks across the top (time of day, timecode, time on the
@@ -1781,6 +1803,7 @@ impl App {
                         (SettingsTab::Output, "Output"),
                         (SettingsTab::Audio, "Audio"),
                         (SettingsTab::Timecode, "Timecode"),
+                        (SettingsTab::Stage, "Stage"),
                         (SettingsTab::Network, "Network"),
                         (SettingsTab::Program, "Program"),
                     ] {
@@ -1823,6 +1846,7 @@ impl App {
                             SettingsTab::Network => self.settings_network(ui),
                             SettingsTab::Program => self.settings_program(ui),
                             SettingsTab::Audio => self.settings_audio(ui),
+                            SettingsTab::Stage => self.settings_stage(ui),
                         });
                     });
             });
@@ -2433,6 +2457,7 @@ enum SettingsTab {
     Output,
     Audio,
     Timecode,
+    Stage,
     Network,
     Program,
 }
@@ -2909,6 +2934,7 @@ impl eframe::App for App {
         }
         self.autosave();
         self.output_window(&ctx);
+        self.stage_window(&ctx);
 
         let osc_port = self.osc.as_ref().map(|l| l.port);
         let rtp = self
@@ -2949,6 +2975,14 @@ impl eframe::App for App {
 impl App {
     fn main_window(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(test)]
+        if self.stage.preview {
+            let scene = self.stage_scene();
+            egui::CentralPanel::default()
+                .frame(Frame::new().fill(BG))
+                .show(ui, |ui| stagewin::paint_stage(ui, ui.max_rect(), &scene));
+            return;
+        }
         egui::Panel::top("top")
             .frame(
                 Frame::new()
@@ -3003,6 +3037,8 @@ impl App {
 
 #[path = "app_health.rs"]
 mod health;
+#[path = "app_stage.rs"]
+mod stagewin;
 #[path = "app_start.rs"]
 mod start;
 #[path = "app_testpic.rs"]

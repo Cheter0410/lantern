@@ -215,6 +215,36 @@ pub struct Show {
     pub timecode: TcSettings,
     /// UDP port for OSC remote control (Show Master, QLab, Companion…).
     pub osc_port: u16,
+    pub stage: StageCfg,
+}
+
+/// The stage display: a screen for the speaker or stage manager.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct StageCfg {
+    /// Display it is on (None: off).
+    pub display: Option<usize>,
+    pub next: bool,
+    pub notes: bool,
+    /// Notes text size on a 1080-line screen (smaller when it does not fit).
+    pub notes_size: f32,
+    /// Countdown length.
+    pub timer_minutes: u32,
+    /// Countdown amber from this many minutes left.
+    pub warn_minutes: u32,
+}
+
+impl Default for StageCfg {
+    fn default() -> Self {
+        StageCfg {
+            display: None,
+            next: true,
+            notes: true,
+            notes_size: 44.0,
+            timer_minutes: 30,
+            warn_minutes: 5,
+        }
+    }
 }
 
 impl Default for Show {
@@ -226,6 +256,7 @@ impl Default for Show {
             audio: AudioCfg::default(),
             timecode: TcSettings::default(),
             osc_port: 53_100,
+            stage: StageCfg::default(),
         }
     }
 }

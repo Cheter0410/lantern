@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0
+
+- Stage display (Settings › Stage): a screen of its own for the speaker or stage manager, on any
+  display. Across the top the time of day, the slide (3 / 12, time on it), the timecode when it is on
+  and a countdown (white, amber in the last minutes, red and counting on when over time). Below a
+  message from the operator, the slide now and the next one with its title, and the notes as large
+  as they fit. Next slide and notes can be switched off; notes size, countdown length and when it
+  turns amber are set there, with a preview.
+- Under the notes, while the stage display is on: a message field (Send with Enter, Clear message)
+  and the countdown (Start / Pause, Reset). Works in Live too. A new message flashes on stage.
+- OSC: `/lantern/stage/message "text"`, `/lantern/stage/clear`, `/lantern/timer/start`,
+  `/timer/pause`, `/timer/toggle`, `/timer/reset [minutes]`.
+- Output health: warns when the stage display is not connected, and – red – when it is on the same
+  display as the output (the audience would see the notes).
+- The live and next pictures leave room for the rows below them, so nothing is pushed out of a
+  small window.
+
 ## 0.6.0
 
 - Output health: Lantern looks at its outputs and inputs twice a second and shows problems as a badge
