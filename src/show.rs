@@ -142,6 +142,9 @@ impl Resolution {
 pub struct Output {
     /// Display number (from 0) for the full-screen output.
     pub display: Option<usize>,
+    /// More displays showing the same picture (projector and LED wall,
+    /// a second projector, a monitor in the foyer). Only with `display`.
+    pub more: Vec<usize>,
     pub ndi: bool,
     pub ndi_name: String,
     pub resolution: Resolution,
@@ -151,10 +154,28 @@ pub struct Output {
     pub fps_auto: bool,
 }
 
+impl Output {
+    /// Every display the picture goes to: the main one first, then the
+    /// others (each once).
+    pub fn displays(&self) -> Vec<usize> {
+        let Some(main) = self.display else {
+            return Vec::new();
+        };
+        let mut v = vec![main];
+        for d in &self.more {
+            if !v.contains(d) {
+                v.push(*d);
+            }
+        }
+        v
+    }
+}
+
 impl Default for Output {
     fn default() -> Self {
         Output {
             display: None,
+            more: Vec::new(),
             ndi: false,
             ndi_name: "Lantern".into(),
             resolution: Resolution::Auto,
@@ -488,6 +509,20 @@ impl Player {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn more_displays_follow_the_main_one() {
+        let mut o = Output {
+            more: vec![2, 0, 2],
+            ..Output::default()
+        };
+        assert!(o.displays().is_empty(), "no main display: none");
+        o.display = Some(0);
+        assert_eq!(o.displays(), [0, 2]);
+        // Older show files have no list.
+        let old: Output = serde_json::from_str(r#"{"display": 1, "ndi": false}"#).unwrap();
+        assert_eq!((old.display, old.more.len()), (Some(1), 0));
+    }
 
     #[test]
     fn timecode_text() {

@@ -57,6 +57,10 @@ pub struct Facts {
     pub displays: usize,
     /// The output display is the one the Lantern window is on.
     pub display_is_here: bool,
+    /// More displays with the same picture.
+    pub more: Vec<usize>,
+    /// The display the Lantern window is on, if known.
+    pub here: Option<usize>,
     pub ndi: bool,
     pub ndi_error: Option<String>,
     /// Receivers watching NDI (None: not known).
@@ -118,6 +122,44 @@ pub fn check(f: &Facts) -> Vec<Issue> {
         ),
         _ => {}
     }
+    let gone: Vec<String> = f
+        .more
+        .iter()
+        .filter(|d| **d >= f.displays)
+        .map(|d| (d + 1).to_string())
+        .collect();
+    match gone.len() {
+        0 => {}
+        1 => add(
+            "more-missing",
+            Level::Error,
+            format!("Display {} is not connected", gone[0]),
+            "It should show the same picture as the output. Plug it in again – Lantern finds it \
+             by itself – or switch it off under Also on."
+                .into(),
+            Area::Output,
+        ),
+        _ => add(
+            "more-missing",
+            Level::Error,
+            format!("Displays {} are not connected", gone.join(", ")),
+            "They should show the same picture as the output. Plug them in again or switch them \
+             off under Also on."
+                .into(),
+            Area::Output,
+        ),
+    }
+    if f.displays > 1 && f.here.is_some_and(|h| f.more.contains(&h)) {
+        add(
+            "more-here",
+            Level::Warn,
+            "An output covers the Lantern window".into(),
+            "One of the displays under Also on is the one Lantern itself is on. Move the Lantern \
+             window to another display, or switch that one off."
+                .into(),
+            Area::Output,
+        );
+    }
     match f.stage_display {
         Some(d) if d >= f.displays => add(
             "stage-missing",
@@ -126,7 +168,7 @@ pub fn check(f: &Facts) -> Vec<Issue> {
             "The stage display does not show. Plug it in again or choose another display.".into(),
             Area::Stage,
         ),
-        Some(d) if f.display == Some(d) => add(
+        Some(d) if f.display == Some(d) || f.more.contains(&d) => add(
             "stage-on-output",
             Level::Error,
             "Stage display on the output".into(),
@@ -283,6 +325,8 @@ mod tests {
             display: Some(1),
             displays: 2,
             display_is_here: false,
+            more: Vec::new(),
+            here: Some(0),
             ndi: false,
             ndi_error: None,
             ndi_receivers: None,
@@ -354,6 +398,38 @@ mod tests {
             ..fine()
         };
         assert_eq!(keys(&f), ["ndi-error"]);
+    }
+
+    #[test]
+    fn more_displays() {
+        let f = Facts {
+            displays: 3,
+            more: vec![2],
+            ..fine()
+        };
+        assert!(keys(&f).is_empty());
+        let f = Facts {
+            displays: 2,
+            more: vec![2, 3],
+            ..fine()
+        };
+        let i = check(&f);
+        assert_eq!(i[0].key, "more-missing");
+        assert_eq!(i[0].title, "Displays 3, 4 are not connected");
+        assert_eq!(i[0].level, Level::Error);
+        let f = Facts {
+            displays: 3,
+            more: vec![0],
+            ..fine()
+        };
+        assert_eq!(keys(&f), ["more-here"]);
+        let f = Facts {
+            displays: 3,
+            more: vec![2],
+            stage_display: Some(2),
+            ..fine()
+        };
+        assert_eq!(keys(&f), ["stage-on-output"]);
     }
 
     #[test]

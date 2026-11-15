@@ -54,6 +54,8 @@ impl App {
                 .display
                 .and_then(|d| self.displays.get(d))
                 .is_some_and(|d| d.here),
+            more: o.displays().into_iter().skip(1).collect(),
+            here: self.displays.iter().position(|d| d.here),
             ndi: o.ndi,
             ndi_error: self.ndi_error.clone(),
             ndi_receivers: self.ndi.as_ref().and_then(|s| s.receivers()),

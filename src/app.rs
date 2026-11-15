@@ -168,7 +168,8 @@ pub struct App {
     settings_open: bool,
     settings_tab: SettingsTab,
     net: net::Net,
-    output_started: Option<Instant>,
+    /// When each output window was asked for (by display).
+    output_started: HashMap<usize, Instant>,
     message: Option<(String, Instant)>,
     scroll_to_live: bool,
     audio: audio::Output,
@@ -243,7 +244,7 @@ impl App {
             settings_open: false,
             settings_tab: SettingsTab::default(),
             net: net::Net::default(),
-            output_started: None,
+            output_started: HashMap::new(),
             message: None,
             scroll_to_live: false,
             audio: audio::Output::default(),
@@ -486,6 +487,7 @@ impl App {
         if let Some(s) = self.show.output.resolution.size() {
             return s;
         }
+        // The main display sets the size; the others show it scaled.
         self.show
             .output
             .display
@@ -828,33 +830,12 @@ impl App {
 
     // ---------------------------------------------------------------- output window
 
+    /// The output windows: the main display and the others with the same picture.
     fn output_window(&mut self, ctx: &egui::Context) {
-        let Some(m) = self.show.output.display else {
-            self.output_started = None;
+        let outs = self.show.output.displays();
+        self.output_started.retain(|d, _| outs.contains(d));
+        if outs.is_empty() {
             return;
-        };
-        let Some(d) = self.displays.get(m).cloned() else {
-            return;
-        };
-        // Give the display a moment after switching on (fullscreen on macOS).
-        let since = *self.output_started.get_or_insert_with(Instant::now);
-        if since.elapsed() < Duration::from_millis(300) {
-            ctx.request_repaint_after(Duration::from_millis(100));
-            return;
-        }
-        let zoom = ctx.zoom_factor().max(0.1);
-        let borderless =
-            cfg!(target_os = "macos") || std::env::var_os("LANTERN_BORDERLESS").is_some();
-        let mut b = egui::ViewportBuilder::default().with_title("Lantern Output");
-        if borderless {
-            b = b
-                .with_decorations(false)
-                .with_resizable(false)
-                .with_position([d.pos[0] / zoom, d.pos[1] / zoom])
-                .with_inner_size([d.size[0] / zoom, d.size[1] / zoom])
-                .with_window_level(egui::WindowLevel::AlwaysOnTop);
-        } else {
-            b = b.with_fullscreen(true).with_monitor(m);
         }
         let (mut prev, mut cur) = (
             self.tex(self.player.previous).cloned(),
@@ -866,37 +847,68 @@ impl App {
         if let Some(t) = &self.test.tex {
             (prev, cur, mix, black, pv, cv) = (None, Some(t.clone()), 1.0, 0.0, None, None);
         }
-        let mut closed = false;
-        ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of(("lantern-output", m)),
-            b,
-            |ui, _| {
-                let rect = ui.ctx().content_rect();
-                let painter = ui.ctx().layer_painter(egui::LayerId::background());
-                paint_output(
-                    &painter,
-                    rect,
-                    prev.as_ref(),
-                    cur.as_ref(),
-                    mix,
-                    black,
-                    pv.as_ref(),
-                    cv.as_ref(),
-                );
-                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-                if ui.ctx().input(|i| i.viewport().close_requested()) {
-                    closed = true;
-                }
-            },
-        );
-        if borderless {
-            crate::platform::raise_output_windows(
-                "Lantern Output",
-                [d.pos[0], d.pos[1], d.size[0], d.size[1]],
+        let zoom = ctx.zoom_factor().max(0.1);
+        let borderless =
+            cfg!(target_os = "macos") || std::env::var_os("LANTERN_BORDERLESS").is_some();
+        for (n, m) in outs.into_iter().enumerate() {
+            let Some(d) = self.displays.get(m).cloned() else {
+                continue;
+            };
+            // Give the display a moment after switching on (fullscreen on macOS).
+            let since = *self.output_started.entry(m).or_insert_with(Instant::now);
+            if since.elapsed() < Duration::from_millis(300) {
+                ctx.request_repaint_after(Duration::from_millis(100));
+                continue;
+            }
+            let title = output_title(n);
+            let mut b = egui::ViewportBuilder::default().with_title(title.clone());
+            if borderless {
+                b = b
+                    .with_decorations(false)
+                    .with_resizable(false)
+                    .with_position([d.pos[0] / zoom, d.pos[1] / zoom])
+                    .with_inner_size([d.size[0] / zoom, d.size[1] / zoom])
+                    .with_window_level(egui::WindowLevel::AlwaysOnTop);
+            } else {
+                b = b.with_fullscreen(true).with_monitor(m);
+            }
+            let mut closed = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(("lantern-output", m)),
+                b,
+                |ui, _| {
+                    let rect = ui.ctx().content_rect();
+                    let painter = ui.ctx().layer_painter(egui::LayerId::background());
+                    paint_output(
+                        &painter,
+                        rect,
+                        prev.as_ref(),
+                        cur.as_ref(),
+                        mix,
+                        black,
+                        pv.as_ref(),
+                        cv.as_ref(),
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        closed = true;
+                    }
+                },
             );
-        }
-        if closed {
-            self.show.output.display = None;
+            if borderless {
+                crate::platform::raise_output_windows(
+                    &title,
+                    [d.pos[0], d.pos[1], d.size[0], d.size[1]],
+                );
+            }
+            if closed {
+                let o = &mut self.show.output;
+                if n == 0 {
+                    o.display = None;
+                } else {
+                    o.more.retain(|x| *x != m);
+                }
+            }
         }
     }
 
@@ -979,13 +991,23 @@ impl App {
                         }),
                     );
                 }
-                if let Some(d) = self
+                let on: Vec<String> = self
                     .show
                     .output
-                    .display
+                    .displays()
+                    .into_iter()
                     .filter(|d| *d < self.displays.len())
-                {
-                    status(ui, &format!("Display {}", d + 1), OK);
+                    .map(|d| (d + 1).to_string())
+                    .collect();
+                match on.len() {
+                    0 => {}
+                    1 => {
+                        status(ui, &format!("Display {}", on[0]), OK);
+                    }
+                    _ => {
+                        status(ui, &format!("Displays {}", on.join(", ")), OK)
+                            .on_hover_text("The same picture on each");
+                    }
                 }
                 // Problems (display gone, no NDI receiver, timecode
                 // stopped, sound device gone): a badge with the list.
@@ -1905,6 +1927,46 @@ impl App {
                         }
                     });
                 ui.end_row();
+                // More displays with the same picture.
+                if let Some(main) = o.display {
+                    ui.label(RichText::new("Also on").color(MUTED));
+                    ui.horizontal_wrapped(|ui| {
+                        let mut list: Vec<usize> = (0..self.displays.len())
+                            .chain(o.more.iter().copied())
+                            .filter(|d| *d != main)
+                            .collect();
+                        list.sort_unstable();
+                        list.dedup();
+                        if list.is_empty() {
+                            ui.label(
+                                RichText::new("No other display connected")
+                                    .small()
+                                    .color(MUTED),
+                            );
+                        }
+                        for i in list {
+                            let mut on = o.more.contains(&i);
+                            let text = if i < self.displays.len() {
+                                format!("Display {}", i + 1)
+                            } else {
+                                format!("Display {} (not connected)", i + 1)
+                            };
+                            if ui
+                                .checkbox(&mut on, text)
+                                .on_hover_text(label(Some(i), &self.displays))
+                                .changed()
+                            {
+                                if on {
+                                    o.more.push(i);
+                                    o.more.sort_unstable();
+                                } else {
+                                    o.more.retain(|d| *d != i);
+                                }
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
                 ui.label(RichText::new("Resolution").color(MUTED));
                 egui::ComboBox::from_id_salt("res")
                     .width(320.0)
@@ -1990,9 +2052,12 @@ impl App {
         self.test_switch(ui);
         ui.add_space(6.0);
         ui.label(
-            RichText::new("The output shows only the slides – no symbols, no mouse pointer.")
-                .small()
-                .color(MUTED),
+            RichText::new(
+                "The output shows only the slides – no symbols, no mouse pointer. Displays \
+                 under \"Also on\" show the same picture, scaled to fit.",
+            )
+            .small()
+            .color(MUTED),
         );
     }
 
@@ -2488,6 +2553,15 @@ fn local_ip() -> Option<String> {
     (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
 }
 
+/// The window title of the n-th output (0: the main one).
+fn output_title(n: usize) -> String {
+    if n == 0 {
+        "Lantern Output".to_string()
+    } else {
+        format!("Lantern Output {}", n + 1)
+    }
+}
+
 fn full_uv() -> Rect {
     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
 }
@@ -2561,6 +2635,7 @@ fn status(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     let g = ui.painter().layout_no_wrap(text.to_string(), font, TEXT);
     let size = Vec2::new(g.size().x + 16.0, 22.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     ui.painter()
         .circle_filled(pos2(r.left() + 4.0, r.center().y), 3.5, color);
     ui.painter().galley(

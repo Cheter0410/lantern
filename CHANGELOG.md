@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0
+
+- Several outputs: Settings › Output › *Also on* sends the same picture to more displays at once –
+  projector and LED wall, a second projector, a monitor in the foyer. Each gets its own full-screen
+  window without symbols or pointer; slides, transitions, videos, blackout and the test picture go
+  to all of them, scaled to fit. The main display sets the resolution. Also in the setup wizard.
+- The top bar names every display in use ("Displays 2, 3, 4").
+- Output health: red when one of them is not connected, amber when one covers the Lantern window,
+  and red when the stage display is on one of them.
+- On macOS each output window is kept on its own display (before, windows were found by the start
+  of their title).
+
 ## 0.9.0
 
 - Show log (*Log* in the top bar, Ctrl/Cmd+L): every cue with the time of day, the timecode when it

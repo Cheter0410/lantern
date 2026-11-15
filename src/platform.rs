@@ -1,11 +1,11 @@
 //! Keeping the output window above everything on macOS (full-screen spaces
 //! would otherwise hide it or show the menu bar).
 
-/// `frame` is the display the output belongs on: position and size in points,
+/// `title` names the window (exactly); `frame` is the display the output belongs on: position and size in points,
 /// top-left origin, as winit reports monitors (relative to the main display).
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code, unused_unsafe)]
-pub fn raise_output_windows(prefix: &str, frame: [f32; 4]) {
+pub fn raise_output_windows(title: &str, frame: [f32; 4]) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSScreen, NSWindowCollectionBehavior};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -25,7 +25,7 @@ pub fn raise_output_windows(prefix: &str, frame: [f32; 4]) {
         );
         let app = NSApplication::sharedApplication(mtm);
         for win in app.windows().iter() {
-            if !win.title().to_string().starts_with(prefix) {
+            if win.title().to_string() != title {
                 continue;
             }
             if win.level() < 1000 {
@@ -54,4 +54,4 @@ pub fn raise_output_windows(prefix: &str, frame: [f32; 4]) {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn raise_output_windows(_prefix: &str, _frame: [f32; 4]) {}
+pub fn raise_output_windows(_title: &str, _frame: [f32; 4]) {}

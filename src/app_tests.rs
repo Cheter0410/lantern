@@ -1033,3 +1033,83 @@ fn show_log_records_the_show() {
     shots.take(&mut h, "l2-problems");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn fake_display(n: usize, here: bool) -> super::Disp {
+    super::Disp {
+        name: format!("Screen {}", n + 1),
+        pos: [n as f32 * 1920.0, 0.0],
+        size: [1920.0, 1080.0],
+        px: [1920, 1080],
+        here,
+        hz: Some(60),
+    }
+}
+
+/// The picture on more displays at once: chosen under "Also on", each one
+/// gets an output window, and a missing one is a problem.
+#[test]
+fn several_outputs_show_the_same_picture() {
+    let dir = temp_dir("outputs");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let mut h = harness(&dir);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    {
+        let a = h.state_mut();
+        a.displays = (0..4).map(|i| fake_display(i, i == 0)).collect();
+        // Not looked up again in the test (there is no real window).
+        a.displays_at = Instant::now() + Duration::from_secs(3600);
+        a.show.output.display = Some(1);
+        a.settings_open = true;
+        a.settings_tab = super::SettingsTab::Output;
+    }
+    h.run_steps(3);
+    assert!(h.query_by_label("Also on").is_some());
+    h.get_by_label("Display 3").click();
+    h.run_steps(2);
+    h.get_by_label("Display 4").click();
+    h.run_steps(2);
+    assert_eq!(h.state().show.output.more, [2, 3]);
+    assert_eq!(h.state().show.output.displays(), [1, 2, 3]);
+    assert!(
+        h.query_by_label("Displays 2, 3, 4").is_some(),
+        "the top bar"
+    );
+    shots.take(&mut h, "o1-also-on");
+    // An output window for each, after the moment they get to start.
+    std::thread::sleep(Duration::from_millis(350));
+    h.run_steps(3);
+    let started: Vec<usize> = {
+        let mut v: Vec<usize> = h.state().output_started.keys().copied().collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(started, [1, 2, 3]);
+    assert_eq!(super::output_title(0), "Lantern Output");
+    assert_eq!(super::output_title(2), "Lantern Output 3");
+
+    // Display 4 unplugged: said in the top bar.
+    h.state_mut().displays.truncate(3);
+    h.state_mut().settings_open = false;
+    std::thread::sleep(Duration::from_millis(550));
+    h.run_steps(3);
+    assert!(
+        h.query_by_label("Health: Display 4 is not connected")
+            .is_some(),
+        "the badge names it"
+    );
+    shots.take(&mut h, "o2-missing");
+    // Off under Also on: no window for it, no problem.
+    h.state_mut().show.output.more.retain(|d| *d != 3);
+    std::thread::sleep(Duration::from_millis(550));
+    h.run_steps(3);
+    assert!(h
+        .query_by_label("Health: Display 4 is not connected")
+        .is_none());
+    assert!(!h.state().output_started.contains_key(&3));
+    // The main output off: the others go with it.
+    h.state_mut().show.output.display = None;
+    h.run_steps(2);
+    assert!(h.state().output_started.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -14,7 +14,8 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Timecode in:** LTC on any audio input, MIDI timecode (MTC) on a MIDI input of this computer
   (e.g. the IAC bus on a Mac, loopMIDI on Windows, or a USB interface), or MTC over RTP-MIDI (Bonjour,
   so Show Master and Macs find the session "Lantern"). Jumps back locate to the right slide.
-- **Outputs:** full-screen on any display (pure picture: no cursor, no symbols, no menus) and NDI
+- **Outputs:** full-screen on any display, or on several at once with the same picture (*Also on*);
+  pure picture: no cursor, no symbols, no menus. And NDI
   (needs the NDI runtime, e.g. with NDI Tools from ndi.video).
 - **Test picture:** Settings › Output switches the outputs to a moving test picture in their own
   resolution (geometry, cropping, levels, sharpness, frame counter, clock, timecode, dropped frames
