@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0c0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Lantern Remote</title>
+<style>
+  :root {
+    --bg: #0c0d10; --panel: #14161b; --card: #1c1f26; --line: #2c303a;
+    --text: #e8ebef; --muted: #8a909e; --go: #16a34a; --go-hi: #1cb454;
+    --now: #3b82f6; --next: #22c55e; --red: #ef4444; --red-bg: #3a1416;
+    --amber: #ffc45c; --amber-bg: #342812;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: max(12px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom)); }
+  header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .brand { color: var(--amber); font-weight: 700; font-size: 18px; }
+  .show { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .clock { font: 600 16px ui-monospace, Menlo, monospace; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--next); } .dot.bad { background: var(--red); }
+  .live { background: var(--red); color: #fff; font-weight: 700; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+  .pics { display: grid; grid-template-columns: 1.6fr 1fr; gap: 10px; }
+  @media (max-width: 420px) { .pics { grid-template-columns: 1fr; } .next .frame { max-width: 62%; } }
+  .label { font-size: 12px; font-weight: 700; letter-spacing: .04em; margin: 0 0 5px; display: flex; gap: 8px; }
+  .label span { color: var(--muted); font-weight: 400; letter-spacing: 0; }
+  .now .label { color: var(--now); } .next .label { color: var(--next); }
+  .frame { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; overflow: hidden; border: 2px solid var(--now); }
+  .next .frame { border: 1px solid var(--next); }
+  .frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; }
+  .frame .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+  .frame.black { border-color: var(--red); }
+  .frame.black::after { content: "BLACKOUT"; position: absolute; inset: 0; display: grid; place-items: center;
+    background: rgba(0,0,0,.94); color: var(--red); font-weight: 700; letter-spacing: .06em; }
+  .title { margin-top: 6px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .transport { display: grid; grid-template-columns: 1fr 2.2fr; gap: 10px; margin-top: 14px; }
+  button { font: inherit; color: var(--text); background: var(--card); border: 0; border-radius: 10px;
+    padding: 0 12px; min-height: 52px; cursor: pointer; touch-action: manipulation; }
+  button:active { filter: brightness(1.25); transform: scale(.985); }
+  button:disabled { opacity: .45; }
+  .go { background: var(--go); color: #fff; min-height: 96px; display: flex; justify-content: space-between;
+    align-items: center; padding: 0 20px; }
+  .go b { font-size: 34px; } .go small { font-size: 15px; opacity: .9; }
+  .go:disabled { background: var(--card); color: var(--muted); }
+  .back { min-height: 96px; font-size: 20px; }
+  .row { display: flex; gap: 10px; margin-top: 10px; }
+  .row > * { flex: 1; }
+  .blackout { background: var(--red-bg); color: var(--red); font-weight: 700; }
+  .blackout.on { background: var(--red); color: #fff; }
+  .video { background: var(--card); }
+  .section { background: var(--panel); border-radius: 10px; padding: 12px; margin-top: 14px; }
+  .section h2 { font-size: 11px; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .timer { display: flex; align-items: center; gap: 10px; }
+  .timer .t { font: 700 30px ui-monospace, Menlo, monospace; flex: 1; }
+  .timer button { min-height: 44px; flex: none; }
+  .msg { display: flex; gap: 8px; margin-top: 10px; }
+  .msg input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px; }
+  .msg button { min-height: 44px; }
+  .onstage { margin-top: 8px; background: var(--amber-bg); color: var(--amber); border-radius: 8px; padding: 8px 10px; display: none;
+    justify-content: space-between; align-items: center; gap: 8px; }
+  .onstage button { min-height: 34px; background: transparent; color: var(--amber); text-decoration: underline; padding: 0; }
+  .notes { white-space: pre-wrap; font-size: 17px; max-height: 40vh; overflow: auto; }
+  .notes.none { color: var(--muted); font-size: 15px; }
+  details summary { color: var(--muted); cursor: pointer; margin-top: 16px; }
+  .reset { background: var(--amber-bg); color: var(--amber); width: 100%; margin-top: 10px; }
+  .overlay { position: fixed; inset: 0; background: rgba(8,9,12,.94); display: none; place-items: center; z-index: 9; }
+  .overlay .box { background: var(--panel); border-radius: 14px; padding: 22px; width: min(340px, 90vw); text-align: center; }
+  .overlay input { font: 600 26px ui-monospace, Menlo, monospace; text-align: center; width: 100%; margin: 14px 0;
+    padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); letter-spacing: .3em; }
+  .overlay button { width: 100%; background: var(--amber); color: #000; font-weight: 700; }
+  .lost { position: fixed; left: 14px; right: 14px; bottom: max(14px, env(safe-area-inset-bottom)); background: var(--red);
+    color: #fff; border-radius: 10px; padding: 10px 14px; display: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <span class="brand">Lantern</span>
+  <span class="live" id="live" hidden>LIVE</span>
+  <span class="show" id="show"></span>
+  <span class="clock" id="clock">--:--:--</span>
+</header>
+
+<div class="pics">
+  <div class="now">
+    <div class="label">NOW <span id="nowLabel">–</span></div>
+    <div class="frame" id="nowFrame"><img id="nowImg" alt=""><div class="empty" id="nowEmpty">Black</div></div>
+  </div>
+  <div class="next">
+    <div class="label">NEXT <span id="nextLabel">–</span></div>
+    <div class="frame" id="nextFrame"><img id="nextImg" alt=""><div class="empty" id="nextEmpty">End</div></div>
+    <div class="title" id="nextTitle"></div>
+    <div class="sub" id="nextHow"></div>
+  </div>
+</div>
+
+<div class="transport">
+  <button class="back" id="back" aria-label="GO minus">GO−</button>
+  <button class="go" id="go" aria-label="GO plus"><b>GO+</b><small id="goWhat">–</small></button>
+</div>
+<div class="row">
+  <button class="blackout" id="blackout">Blackout</button>
+  <button class="video" id="video" hidden>Play / pause video</button>
+</div>
+
+<div class="section">
+  <h2>COUNTDOWN · STAGE</h2>
+  <div class="timer">
+    <span class="t" id="timer">--:--</span>
+    <button id="timerBtn">Start</button>
+    <button id="timerReset">Reset</button>
+  </div>
+  <div class="msg">
+    <input id="msg" placeholder="Message to the stage…" maxlength="300" enterkeyhint="send">
+    <button id="send">Send</button>
+  </div>
+  <div class="onstage" id="onstage"><span id="onstageText"></span><button id="clearMsg">Clear</button></div>
+</div>
+
+<div class="section">
+  <h2>NOTES</h2>
+  <div class="notes none" id="notes">No notes on this slide</div>
+</div>
+
+<details>
+  <summary>More</summary>
+  <button class="reset" id="reset">Reset – back to black before the first slide</button>
+</details>
+
+<div class="overlay" id="pinBox">
+  <div class="box">
+    <div class="brand">Lantern Remote</div>
+    <div class="sub" style="margin-top:6px">Enter the PIN shown in Lantern under Settings › Network.</div>
+    <input id="pin" inputmode="numeric" autocomplete="off" maxlength="12">
+    <button id="pinOk">Connect</button>
+  </div>
+</div>
+<div class="lost" id="lost">Connection to Lantern lost – trying again…</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let pin = localStorage.getItem("lantern-pin") || "";
+let last = { now: -1, next: -1 };
+let state = null;
+
+function headers() { return { "X-Pin": pin }; }
+
+async function post(action, body) {
+  if (navigator.vibrate) navigator.vibrate(15);
+  try {
+    const r = await fetch("/api/" + action, { method: "POST", headers: headers(), body: body || "" });
+    if (r.status === 403) askPin();
+  } catch (e) { lost(true); }
+  setTimeout(poll, 60);
+}
+
+function askPin() { $("pinBox").style.display = "grid"; $("pin").focus(); }
+$("pinOk").onclick = () => {
+  pin = $("pin").value.trim();
+  localStorage.setItem("lantern-pin", pin);
+  $("pinBox").style.display = "none";
+  last = { now: -1, next: -1 };
+  poll();
+};
+$("pin").addEventListener("keydown", e => { if (e.key === "Enter") $("pinOk").click(); });
+
+function lost(on) {
+  $("lost").style.display = on ? "block" : "none";
+  $("dot").className = "dot " + (on ? "bad" : "ok");
+}
+
+function pic(which, id) {
+  const img = $(which + "Img"), empty = $(which + "Empty");
+  if (id === null || id === undefined) { img.style.display = "none"; empty.style.display = "grid"; last[which] = -1; return; }
+  if (last[which] !== id) {
+    last[which] = id;
+    img.onload = () => { img.style.display = "block"; empty.style.display = "none"; };
+    img.src = "/img/" + which + "?v=" + id + "&pin=" + encodeURIComponent(pin);
+  }
+}
+
+function render(s) {
+  state = s;
+  $("show").textContent = s.show || "";
+  $("clock").textContent = s.clock;
+  $("live").hidden = !s.live;
+  $("nowLabel").textContent = s.slide ? `Slide ${s.slide} of ${s.total}` : "Black";
+  $("nextLabel").textContent = s.next ? `Slide ${s.next}` : "End";
+  $("nowEmpty").textContent = s.slide ? "" : "Black";
+  $("nextTitle").textContent = s.next_title || "";
+  $("nextHow").textContent = s.next_how || "";
+  pic("now", s.slide ? s.pic_now : null);
+  pic("next", s.next ? s.pic_next : null);
+  $("nowFrame").classList.toggle("black", !!s.blackout);
+  $("go").disabled = !s.can_go;
+  $("goWhat").textContent = s.go_what;
+  const b = $("blackout");
+  b.classList.toggle("on", !!s.blackout);
+  b.textContent = s.blackout ? "Blackout on" : "Blackout";
+  $("video").hidden = !s.video;
+  if (s.video) $("video").textContent = s.video_playing ? "Pause video" : "Play video";
+  $("timer").textContent = s.timer;
+  $("timer").style.color = s.timer_color;
+  $("timerBtn").textContent = s.timer_running ? "Pause" : "Start";
+  $("onstage").style.display = s.message ? "flex" : "none";
+  $("onstageText").textContent = s.message ? "On stage: " + s.message : "";
+  const n = $("notes");
+  n.textContent = s.notes || "No notes on this slide";
+  n.classList.toggle("none", !s.notes);
+}
+
+let busy = false;
+async function poll() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch("/api/state", { headers: headers(), cache: "no-store" });
+    if (r.status === 403) { askPin(); lost(false); }
+    else if (r.ok) { render(await r.json()); lost(false); }
+  } catch (e) { lost(true); }
+  busy = false;
+}
+
+$("go").onclick = () => post("go");
+$("back").onclick = () => post("back");
+$("blackout").onclick = () => post("blackout");
+$("video").onclick = () => post("video");
+$("timerBtn").onclick = () => post("timer");
+$("timerReset").onclick = () => post("timer-reset");
+$("clearMsg").onclick = () => post("clear-message");
+$("send").onclick = () => { const t = $("msg").value.trim(); if (t) { post("message", t); $("msg").value = ""; } };
+$("msg").addEventListener("keydown", e => { if (e.key === "Enter") $("send").click(); });
+$("reset").onclick = () => { if (confirm("Reset the show to black before the first slide?")) post("reset"); };
+
+poll();
+setInterval(poll, 400);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+</script>
+</body>
+</html>

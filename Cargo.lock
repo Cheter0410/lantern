@@ -2230,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "lantern"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "cpal",
@@ -2245,6 +2245,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "qrcodegen",
  "rfd",
  "rosc",
  "roxmltree",
@@ -3399,6 +3400,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3984,7 +3991,7 @@ dependencies = [
 
 [[package]]
 name = "sm-mdns"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "gethostname",
  "mdns-sd",
@@ -3995,7 +4002,7 @@ dependencies = [
 
 [[package]]
 name = "sm-rtpmidi"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -4003,7 +4010,7 @@ dependencies = [
 
 [[package]]
 name = "sm-timecode"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",

@@ -193,6 +193,8 @@ pub struct App {
     health: health::HealthUi,
     /// The stage display's countdown and message.
     stage: stagewin::StageNow,
+    /// The web remote's server.
+    web: webui::WebUi,
 }
 
 impl App {
@@ -252,6 +254,7 @@ impl App {
             start: start::StartState::default(),
             health: health::HealthUi::default(),
             stage: stagewin::StageNow::default(),
+            web: webui::WebUi::default(),
         };
         // A file given to open: straight to it. Otherwise the start screen.
         if let Some(p) = open {
@@ -2151,6 +2154,7 @@ impl App {
                 .color(AMBER),
             );
         }
+        self.settings_web(ui);
         section(ui, "Remote control (OSC)");
         ui.horizontal(|ui| {
             ui.label(RichText::new("UDP port").color(MUTED));
@@ -2913,6 +2917,7 @@ impl eframe::App for App {
         }
         self.tc.apply(&self.show.timecode.clone());
         self.update_osc(&ctx);
+        self.update_web(&ctx);
         if self.screen == start::Screen::Main {
             self.keys(&ctx);
         }
@@ -3045,6 +3050,8 @@ mod start;
 mod testpic;
 #[path = "app_video.rs"]
 mod video;
+#[path = "app_web.rs"]
+mod webui;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

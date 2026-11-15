@@ -21,6 +21,7 @@ pub enum Area {
     Audio,
     Timecode,
     Stage,
+    Network,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +72,8 @@ pub struct Facts {
     pub sound_in_show: bool,
     /// Stage display chosen.
     pub stage_display: Option<usize>,
+    /// The web remote could not start.
+    pub web_error: Option<String>,
 }
 
 /// Timecode standing longer than this is a problem.
@@ -133,6 +136,15 @@ pub fn check(f: &Facts) -> Vec<Issue> {
             Area::Stage,
         ),
         _ => {}
+    }
+    if let Some(e) = &f.web_error {
+        add(
+            "web-error",
+            Level::Warn,
+            "Web remote does not run".into(),
+            e.clone(),
+            Area::Network,
+        );
     }
     if f.ndi {
         if let Some(e) = &f.ndi_error {
@@ -282,6 +294,7 @@ mod tests {
             audio_status: String::new(),
             sound_in_show: true,
             stage_display: None,
+            web_error: None,
         }
     }
 

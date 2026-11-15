@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0
+
+- Web remote (Settings › Network › Web remote): run the show from a phone or tablet in the same
+  network, in its browser – no app to install. Scan the QR code shown there or type the address.
+  The page shows the slide now and next (with title and trigger), GO+, GO− and Blackout as big
+  buttons, play / pause for the slide's video, the notes, the countdown (Start / Pause, Reset) and
+  stage messages (Send, Clear); Reset sits under *More* and asks first. It follows the show a few
+  times a second, works in Live, says when the connection is lost and finds it again.
+- An optional PIN keeps others in the network out (asked once on each device). Off by default;
+  port 8090, changeable. Settings shows how many devices are connected.
+- Output health warns when the web remote can't start (e.g. the port is taken).
+
 ## 0.7.0
 
 - Stage display (Settings › Stage): a screen of its own for the speaker or stage manager, on any

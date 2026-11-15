@@ -808,3 +808,137 @@ fn stage_display_shows_message_countdown_and_notes() {
     shots.take(&mut h, "st4-settings");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn http(port: u16, method: &str, path: &str, pin: &str, body: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: x\r\nX-Pin: {pin}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).expect("send");
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).expect("read");
+    let text = String::from_utf8_lossy(&out).to_string();
+    let code = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|x| x.1)
+        .unwrap_or("")
+        .to_string();
+    (code, body)
+}
+
+fn web_harness(dir: &Path) -> (Harness<'static, App>, u16) {
+    let mut h = harness(dir);
+    h.state_mut().settings.live = false;
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    {
+        let a = h.state_mut();
+        a.show.web.enabled = true;
+        // A free port (the settings field holds 1024 and up).
+        a.show.web.port = std::net::TcpListener::bind("0.0.0.0:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("free port");
+        a.slides[0].notes = "Welcome everyone – thank the sponsors.".into();
+        a.slides[1].title = "Agenda".into();
+    }
+    h.run_steps(3);
+    let port = h.state().web.server.as_ref().expect("web server").port;
+    (h, port)
+}
+
+/// The phone presses GO, Blackout, sends a stage message – over HTTP, as
+/// the page does; the state it reads follows the show; a PIN keeps others out.
+#[test]
+fn web_remote_controls_the_show() {
+    let dir = temp_dir("web");
+    let shots = Shots(std::env::var_os("LANTERN_SHOTS").map(PathBuf::from));
+    let (mut h, port) = web_harness(&dir);
+    let state = |h: &mut Harness<'_, App>| {
+        // The state is handed over every 100 ms.
+        std::thread::sleep(Duration::from_millis(120));
+        h.run_steps(2);
+        let (code, body) = http(port, "GET", "/api/state", "", "");
+        assert_eq!(code, 200);
+        serde_json::from_str::<serde_json::Value>(&body).expect("json")
+    };
+    let s = state(&mut h);
+    assert_eq!(s["slide"], serde_json::Value::Null);
+    assert_eq!(s["total"], 3);
+    assert_eq!(s["go_what"], "Slide 1");
+
+    assert_eq!(http(port, "POST", "/api/go", "", "").0, 200);
+    run_until(&mut h, "GO from the phone", |a| a.player.current == Some(0));
+    run_until(&mut h, "the pictures", |a| {
+        a.fulls.contains_key(&0) && a.fulls.contains_key(&1)
+    });
+    let s = state(&mut h);
+    assert_eq!(s["slide"], 1);
+    assert_eq!(s["next"], 2);
+    assert_eq!(s["next_title"], "Agenda");
+    assert_eq!(s["notes"], "Welcome everyone – thank the sponsors.");
+    let (code, _) = http(port, "GET", &format!("/img/now?v={}", s["pic_now"]), "", "");
+    assert_eq!(code, 200, "the picture of the slide now");
+
+    // Live mode: the remote still runs the show.
+    h.state_mut().set_live(true);
+    http(port, "POST", "/api/blackout", "", "");
+    run_until(&mut h, "blackout from the phone", |a| a.player.blackout);
+    http(port, "POST", "/api/message", "", "Mic 2 is off");
+    run_until(&mut h, "the stage message", |a| a.stage.message.is_some());
+    http(port, "POST", "/api/timer", "", "");
+    run_until(&mut h, "the countdown", |a| a.stage.timer.running());
+    let s = state(&mut h);
+    assert_eq!(s["blackout"], true);
+    assert_eq!(s["live"], true);
+    assert_eq!(s["message"], "Mic 2 is off");
+
+    // A PIN: the page asks for it, nothing goes without.
+    h.state_mut().set_live(false);
+    h.state_mut().show.web.pin = "4711".into();
+    std::thread::sleep(Duration::from_millis(120));
+    h.run_steps(2);
+    assert_eq!(http(port, "POST", "/api/go", "", "").0, 403);
+    assert_eq!(http(port, "POST", "/api/go", "4711", "").0, 200);
+    run_until(&mut h, "GO with the PIN", |a| a.player.current == Some(1));
+
+    // Settings › Network: address, QR code, devices.
+    h.state_mut().settings_open = true;
+    h.state_mut().settings_tab = super::SettingsTab::Network;
+    h.run_steps(4);
+    assert!(h.query_by_label("Scan with the phone, or open:").is_some());
+    assert_eq!(h.state().web.server.as_ref().map(|s| s.clients()), Some(1));
+    shots.take(&mut h, "w1-settings");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Not a test: keeps a web remote running for a minute to look at the page
+/// in a browser (`cargo test -- --ignored web_remote_demo --nocapture`).
+#[test]
+#[ignore]
+fn web_remote_demo() {
+    let dir = temp_dir("webdemo");
+    let (mut h, port) = web_harness(&dir);
+    h.state_mut().command(crate::osc::Command::Go);
+    h.state_mut()
+        .stage_command(crate::osc::StageCmd::Message("5 minutes left".into()));
+    h.state_mut().stage.timer.start();
+    println!("WEB REMOTE http://127.0.0.1:{port}");
+    let end = Instant::now()
+        + Duration::from_secs(
+            std::env::var("LANTERN_DEMO_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60),
+        );
+    while Instant::now() < end {
+        h.step();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}

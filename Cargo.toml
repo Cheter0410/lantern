@@ -2,7 +2,7 @@
 members = [".", "crates/*"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
@@ -51,6 +51,7 @@ ureq = { version = "2", features = ["native-certs"] }
 sha2 = "0.10"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 midir = "0.10"
+qrcodegen = "1.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

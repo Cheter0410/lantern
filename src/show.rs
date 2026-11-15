@@ -216,6 +216,27 @@ pub struct Show {
     /// UDP port for OSC remote control (Show Master, QLab, Companion…).
     pub osc_port: u16,
     pub stage: StageCfg,
+    pub web: WebCfg,
+}
+
+/// The web remote for a phone or tablet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct WebCfg {
+    pub enabled: bool,
+    pub port: u16,
+    /// Empty: no PIN.
+    pub pin: String,
+}
+
+impl Default for WebCfg {
+    fn default() -> Self {
+        WebCfg {
+            enabled: false,
+            port: 8090,
+            pin: String::new(),
+        }
+    }
 }
 
 /// The stage display: a screen for the speaker or stage manager.
@@ -257,6 +278,7 @@ impl Default for Show {
             timecode: TcSettings::default(),
             osc_port: 53_100,
             stage: StageCfg::default(),
+            web: WebCfg::default(),
         }
     }
 }

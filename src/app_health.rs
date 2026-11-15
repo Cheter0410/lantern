@@ -72,6 +72,7 @@ impl App {
                 .values()
                 .any(|c| c.as_ref().is_ok_and(|c| c.probe.audio)),
             stage_display: self.show.stage.display,
+            web_error: self.web.error.as_ref().map(|(_, e)| e.clone()),
         };
         let fresh = self.health.monitor.update(health::check(&facts));
         if let Some(i) = fresh.iter().max_by_key(|i| i.level) {
@@ -200,6 +201,7 @@ impl App {
                                 Area::Audio => "Audio settings",
                                 Area::Timecode => "Timecode settings",
                                 Area::Stage => "Stage settings",
+                                Area::Network => "Network settings",
                             };
                             if ui.small_button(tab).clicked() {
                                 goto = Some(i.area);
@@ -214,6 +216,7 @@ impl App {
                 Area::Audio => SettingsTab::Audio,
                 Area::Timecode => SettingsTab::Timecode,
                 Area::Stage => SettingsTab::Stage,
+                Area::Network => SettingsTab::Network,
             };
             close = true;
         }

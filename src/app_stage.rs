@@ -54,6 +54,13 @@ pub(super) struct StageScene {
     notes_size: f32,
 }
 
+impl StageScene {
+    /// The countdown as text and its colour.
+    pub(super) fn timer_parts(&self) -> (String, Color32) {
+        (self.timer.clone(), self.timer_color)
+    }
+}
+
 const STAGE_BG: Color32 = Color32::from_rgb(6, 7, 9);
 
 impl App {

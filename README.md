@@ -23,6 +23,9 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   time, slide, timecode and a countdown, a message from the operator, the slide now and next, and
   the notes in large type. Messages and the countdown are set under the notes (also in Live) or
   over OSC.
+- **Web remote:** a page for a phone or tablet in the same network (Settings › Network, with a QR
+  code): GO+, GO−, Blackout, the slide now and next, notes, video play / pause, the countdown and
+  stage messages; optional PIN.
 - **Output health:** a badge in the top bar when something is wrong – display not connected or
   covering the Lantern window, no output, NDI not sending or without a receiver, timecode missing or
   stopped, sound device gone – with what to do and a way to the settings. A sound device that is

@@ -21,6 +21,7 @@ mod stage;
 mod terminal;
 mod testpattern;
 mod timecode;
+mod web;
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
