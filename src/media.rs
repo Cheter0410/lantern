@@ -95,9 +95,9 @@ pub fn probe(ffmpeg: &Path, file: &Path) -> Result<Probe, String> {
         .map_err(|e| format!("FFmpeg could not be started: {e}"))?;
     let text = String::from_utf8_lossy(&out.stderr);
     let p = parse_probe(&text);
-    if !p.video {
+    if !p.video && !p.audio {
         let last = text.lines().last().unwrap_or("").trim().to_string();
-        return Err(format!("FFmpeg can't read this video: {last}"));
+        return Err(format!("FFmpeg can't read this file: {last}"));
     }
     Ok(p)
 }
@@ -121,6 +121,10 @@ pub struct Start<'a> {
     pub mixer: &'a Arc<Mixer>,
     /// 0..1.
     pub gain: f32,
+    /// Start this many seconds in.
+    pub from: f64,
+    /// Decode the picture (false: sound only, e.g. an audio clip).
+    pub picture: bool,
 }
 
 /// A clip playing.
@@ -136,8 +140,22 @@ pub struct Playing {
     pub voice: Option<Arc<Voice>>,
     rate: u32,
     started: Instant,
-    /// Sound over (short track): the clock goes on from here by the wall.
-    sound_end: Mutex<Option<(f64, Instant)>>,
+    /// Position the processes started at (after a seek).
+    offset: f64,
+    /// Paused since, and all the time paused before.
+    paused_at: Option<Instant>,
+    paused_for: Duration,
+    /// Sound over (short track): the clock goes on from here by the wall
+    /// (clock, wall seconds then).
+    sound_end: Mutex<Option<(f64, f64)>>,
+    /// To start again somewhere else.
+    ffmpeg: PathBuf,
+    clip: Clip,
+    size: (u32, u32),
+    fps_in: u32,
+    picture: bool,
+    mixer: Arc<Mixer>,
+    gain: f32,
     /// The decoder finished and every frame was taken.
     drained: bool,
     pub duration: Option<f64>,
@@ -157,54 +175,61 @@ impl Playing {
     pub fn start(s: Start<'_>) -> Result<Playing, String> {
         let (w, h) = (s.w.max(2) & !1, s.h.max(2) & !1);
         let fps = s.fps.clamp(1, 120);
-        let looped: &[&str] = if s.looped {
-            &["-stream_loop", "-1"]
-        } else {
-            &[]
-        };
+        let from = s.from.max(0.0);
+        let mut input: Vec<String> = Vec::new();
+        if s.looped {
+            input.extend(["-stream_loop".into(), "-1".into()]);
+        }
+        if from > 0.0 {
+            input.extend(["-ss".into(), format!("{from:.3}")]);
+        }
         let mut children = Vec::new();
-
-        // Picture.
-        let mut vc = command(s.ffmpeg)
-            .args(["-loglevel", "error"])
-            .args(looped)
-            .arg("-i")
-            .arg(&s.clip.file)
-            .args(["-an", "-sn", "-vf"])
-            .arg(format!("fps={fps},scale={w}:{h}:flags=bicubic"))
-            .args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("FFmpeg could not be started: {e}"))?;
-        let mut out = vc.stdout.take().ok_or("FFmpeg: no output")?;
-        children.push(vc);
         let (tx, frames) = sync_channel::<Image>(6);
-        let size = (w * h * 4) as usize;
-        std::thread::Builder::new()
-            .name("lantern-video".into())
-            .spawn(move || loop {
-                let mut buf = vec![0u8; size];
-                if out.read_exact(&mut buf).is_err() {
-                    break;
-                }
-                let img = Image {
-                    w,
-                    h,
-                    rgba: Arc::new(buf),
-                };
-                if tx.send(img).is_err() {
-                    break;
-                }
-            })
-            .map_err(|e| e.to_string())?;
+        let picture = s.picture && s.clip.probe.video;
+        if !picture {
+            // No picture: the queue is closed (drained at once).
+            drop(tx);
+        } else {
+            let mut vc = command(s.ffmpeg)
+                .args(["-loglevel", "error"])
+                .args(&input)
+                .arg("-i")
+                .arg(&s.clip.file)
+                .args(["-an", "-sn", "-vf"])
+                .arg(format!("fps={fps},scale={w}:{h}:flags=bicubic"))
+                .args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("FFmpeg could not be started: {e}"))?;
+            let mut out = vc.stdout.take().ok_or("FFmpeg: no output")?;
+            children.push(vc);
+            let size = (w * h * 4) as usize;
+            std::thread::Builder::new()
+                .name("lantern-video".into())
+                .spawn(move || loop {
+                    let mut buf = vec![0u8; size];
+                    if out.read_exact(&mut buf).is_err() {
+                        break;
+                    }
+                    let img = Image {
+                        w,
+                        h,
+                        rgba: Arc::new(buf),
+                    };
+                    if tx.send(img).is_err() {
+                        break;
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+        }
 
         // Sound.
         let rate = s.mixer.rate();
         let voice = if s.clip.probe.audio {
             let mut ac = command(s.ffmpeg)
                 .args(["-loglevel", "error"])
-                .args(looped)
+                .args(&input)
                 .arg("-i")
                 .arg(&s.clip.file)
                 .args(["-vn", "-sn", "-ac", "2", "-ar"])
@@ -258,34 +283,114 @@ impl Playing {
         Ok(Playing {
             children,
             frames,
-            next_index: 0,
+            next_index: (from * f64::from(fps)).floor() as u64,
             shown: None,
             pending: None,
             fps: f64::from(fps),
             voice,
             rate,
             started: Instant::now(),
+            offset: from,
+            paused_at: None,
+            paused_for: Duration::ZERO,
             sound_end: Mutex::new(None),
             drained: false,
             duration: s.clip.probe.duration,
             looped: s.looped,
+            ffmpeg: s.ffmpeg.to_path_buf(),
+            clip: s.clip.clone(),
+            size: (s.w, s.h),
+            fps_in: s.fps,
+            picture: s.picture,
+            mixer: s.mixer.clone(),
+            gain: s.gain,
         })
     }
 
-    /// Seconds played: the sound played so far, else the wall clock.
+    /// Seconds since the start, without the time paused.
+    fn wall(&self) -> f64 {
+        let now = self.paused_at.unwrap_or_else(Instant::now);
+        now.duration_since(self.started)
+            .saturating_sub(self.paused_for)
+            .as_secs_f64()
+    }
+
+    /// Seconds into the clip (counting on over loops): the sound played so
+    /// far, else the wall clock.
     pub fn clock(&self) -> f64 {
+        let wall = self.wall();
         let Some(v) = &self.voice else {
-            return self.started.elapsed().as_secs_f64();
+            return self.offset + wall;
         };
-        let t = v.played() as f64 / f64::from(self.rate.max(1));
+        let t = self.offset + v.played() as f64 / f64::from(self.rate.max(1));
         if !v.is_gone() {
             return t;
         }
         let Ok(mut end) = self.sound_end.lock() else {
             return t;
         };
-        let (at, since) = *end.get_or_insert((t, Instant::now()));
-        at + since.elapsed().as_secs_f64()
+        let (at, then) = *end.get_or_insert((t, wall));
+        at + (wall - then)
+    }
+
+    /// Position within the clip (seconds), for the timeline.
+    pub fn position(&self) -> f64 {
+        let t = self.clock();
+        match self.duration.filter(|d| *d > 0.0) {
+            Some(d) if self.looped => t % d,
+            Some(d) => t.min(d),
+            None => t,
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused_at.is_some()
+    }
+
+    /// Stop where it is (the picture stays), or play on.
+    pub fn set_paused(&mut self, paused: bool) {
+        match (paused, self.paused_at) {
+            (true, None) => self.paused_at = Some(Instant::now()),
+            (false, Some(at)) => {
+                self.paused_for += at.elapsed();
+                self.paused_at = None;
+            }
+            _ => return,
+        }
+        if let Some(v) = &self.voice {
+            v.set_paused(paused, false);
+        }
+    }
+
+    /// Go to `to` seconds (start the decoders there again). Keeps paused
+    /// or playing, the volume and the picture until the new one comes.
+    pub fn seek(&mut self, to: f64) -> Result<(), String> {
+        let end = self.duration.unwrap_or(f64::MAX);
+        let to = to.clamp(0.0, (end - 0.05).max(0.0));
+        let mut new = Playing::start(Start {
+            ffmpeg: &self.ffmpeg,
+            clip: &self.clip,
+            w: self.size.0,
+            h: self.size.1,
+            fps: self.fps_in,
+            looped: self.looped,
+            mixer: &self.mixer,
+            gain: self.gain,
+            from: to,
+            picture: self.picture,
+        })?;
+        if self.is_paused() {
+            new.paused_at = Some(new.started);
+            if let Some(v) = &new.voice {
+                v.set_paused(true, true);
+            }
+        }
+        new.shown = self.shown.take();
+        if let Some(v) = &self.voice {
+            v.stop(0.02, self.rate);
+        }
+        *self = new;
+        Ok(())
     }
 
     /// The frame for now; `true` when it changed.
@@ -340,7 +445,8 @@ impl Playing {
     }
 
     /// Fade the sound to `gain` within `secs`.
-    pub fn set_gain(&self, gain: f32, secs: f32) {
+    pub fn set_gain(&mut self, gain: f32, secs: f32) {
+        self.gain = gain;
         if let Some(v) = &self.voice {
             v.set_gain(gain, secs, self.rate);
         }
@@ -477,6 +583,8 @@ mod tests {
             looped: false,
             mixer: &out.mixer,
             gain: 1.0,
+            from: 0.0,
+            picture: true,
         })
         .unwrap();
         let t0 = Instant::now();
@@ -492,6 +600,84 @@ mod tests {
         assert!((3.8..6.0).contains(&took), "played in {took} s");
         assert!(frames > 80, "{frames} frames shown");
         assert_eq!(pl.frame().unwrap().w, 64);
+        let _ = std::fs::remove_file(&clip.file);
+    }
+
+    /// Pause holds picture and clock, play goes on, seek jumps; also
+    /// with the sound only.
+    #[test]
+    fn pauses_resumes_and_seeks() {
+        let Some(ff) = ffmpeg() else { return };
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/video.pptx");
+        let file = std::env::temp_dir().join(format!("lantern-seek-{}.mp4", std::process::id()));
+        crate::pptx::extract(&p, "ppt/media/media1.mp4", &file).unwrap();
+        let clip = Clip {
+            probe: probe(&ff, &file).unwrap(),
+            file,
+        };
+        let mut out = crate::audio::Output::default();
+        out.apply(&crate::show::AudioCfg {
+            enabled: false,
+            ..Default::default()
+        });
+        let run = |pl: &mut Playing, ms: u64| {
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_millis(ms) {
+                pl.update();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        for picture in [true, false] {
+            let mut pl = Playing::start(Start {
+                ffmpeg: &ff,
+                clip: &clip,
+                w: 64,
+                h: 36,
+                fps: 25,
+                looped: false,
+                mixer: &out.mixer,
+                gain: 1.0,
+                from: 0.0,
+                picture,
+            })
+            .unwrap();
+            run(&mut pl, 700);
+            let a = pl.position();
+            assert!((0.4..1.0).contains(&a), "played {a}");
+            pl.set_paused(true);
+            run(&mut pl, 100);
+            let held = pl.position();
+            run(&mut pl, 500);
+            assert!((pl.position() - held).abs() < 0.03, "paused stands");
+            assert!(!pl.ended());
+            pl.set_paused(false);
+            run(&mut pl, 400);
+            assert!(pl.position() > held + 0.25, "plays on");
+
+            // Seek while paused: goes there, stays paused, shows that frame.
+            pl.set_paused(true);
+            pl.seek(3.0).unwrap();
+            run(&mut pl, 300);
+            assert!(pl.is_paused());
+            assert!((pl.position() - 3.0).abs() < 0.05, "at {}", pl.position());
+            if picture {
+                assert!(pl.frame().is_some(), "the frame there is shown");
+            }
+            pl.set_paused(false);
+            let t0 = Instant::now();
+            while !pl.ended() {
+                assert!(t0.elapsed() < Duration::from_secs(3), "end after seek");
+                pl.update();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let took = t0.elapsed().as_secs_f64();
+            assert!((0.6..2.0).contains(&took), "1 s left took {took}");
+
+            // From the end back to the start.
+            pl.seek(0.0).unwrap();
+            run(&mut pl, 300);
+            assert!(!pl.ended() && pl.position() < 0.6, "{}", pl.position());
+        }
         let _ = std::fs::remove_file(&clip.file);
     }
 }

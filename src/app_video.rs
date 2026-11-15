@@ -31,6 +31,8 @@ pub(super) struct VideoNow {
     pub gain: f32,
     /// The end was handled (next slide given once).
     pub end_done: bool,
+    /// Where the timeline is being dragged to (seconds), until let go.
+    pub scrub: Option<f64>,
 }
 
 /// How a slide's video plays: from the slide settings, else the presentation.
@@ -55,6 +57,48 @@ pub(super) fn mode(info: &VideoInfo, cfg: Option<&show::VideoCfg>) -> Mode {
             e => e,
         },
         volume: cfg.volume.unwrap_or(info.volume).clamp(0.0, 1.0),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Icon {
+    Play,
+    Pause,
+    Restart,
+}
+
+/// Transport symbols, drawn (the fonts have no such glyphs).
+fn icon(ui: &egui::Ui, which: Icon, c: egui::Pos2, color: Color32) {
+    let p = ui.painter();
+    let tri = |x: f32, w: f32, h: f32, right: bool| {
+        let pts = if right {
+            vec![pos2(x, c.y - h), pos2(x + w, c.y), pos2(x, c.y + h)]
+        } else {
+            vec![pos2(x + w, c.y - h), pos2(x, c.y), pos2(x + w, c.y + h)]
+        };
+        egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE)
+    };
+    match which {
+        Icon::Play => {
+            p.add(tri(c.x - 5.0, 11.0, 6.5, true));
+        }
+        Icon::Pause => {
+            for dx in [-4.5, 1.5] {
+                p.rect_filled(
+                    Rect::from_min_size(pos2(c.x + dx, c.y - 6.5), Vec2::new(3.5, 13.0)),
+                    1.0,
+                    color,
+                );
+            }
+        }
+        Icon::Restart => {
+            p.rect_filled(
+                Rect::from_min_size(pos2(c.x - 7.0, c.y - 6.0), Vec2::new(2.5, 12.0)),
+                0.5,
+                color,
+            );
+            p.add(tri(c.x - 4.0, 10.0, 6.0, false));
+        }
     }
 }
 
@@ -176,6 +220,7 @@ impl App {
                     overlay: None,
                     gain: 0.0,
                     end_done: false,
+                    scrub: None,
                 });
                 if auto {
                     self.start_video();
@@ -263,6 +308,8 @@ impl App {
                 looped: m.end == VideoEnd::Loop,
                 mixer: &self.audio.mixer,
                 gain: target,
+                from: 0.0,
+                picture: !self.video_info(i).is_some_and(|v| v.audio_only),
             }),
             (Some(Err(e)), _) => Err(e.clone()),
             (_, None) => Err("FFmpeg is missing".into()),
@@ -282,6 +329,233 @@ impl App {
         }
     }
 
+    /// Play, pause, go to a point of the live slide's video or sound.
+    pub(super) fn video_command(&mut self, c: osc::VideoCmd) {
+        use osc::VideoCmd as C;
+        let Some(v) = self.video.as_mut() else { return };
+        let Some(p) = v.playing.as_mut() else {
+            // Not started yet: anything but pause starts it.
+            if !matches!(c, C::Pause) {
+                self.start_video();
+                if let C::Seek(t) | C::Skip(t) = c {
+                    if t > 0.0 {
+                        self.video_command(C::Seek(t));
+                    }
+                }
+            }
+            return;
+        };
+        let pos = p.position();
+        let at_end = p.ended();
+        let r = match c {
+            C::Play if at_end => p.seek(0.0),
+            C::Play => {
+                p.set_paused(false);
+                Ok(())
+            }
+            C::Pause => {
+                p.set_paused(true);
+                Ok(())
+            }
+            C::Toggle if at_end => p.seek(0.0).map(|()| p.set_paused(false)),
+            C::Toggle => {
+                let paused = p.is_paused();
+                p.set_paused(!paused);
+                Ok(())
+            }
+            C::Restart => p.seek(0.0),
+            C::Seek(t) => p.seek(t),
+            C::Skip(d) => p.seek(pos + d),
+        };
+        if !matches!(c, C::Pause | C::Toggle) || at_end {
+            v.end_done = false;
+        }
+        if let Err(e) = r {
+            v.error = Some(e);
+        }
+    }
+
+    /// The bar under the Live picture while the live slide has a video or
+    /// sound: back to the start, play/pause, ±10 s, timeline with times.
+    pub(super) fn video_transport(&mut self, ui: &mut egui::Ui) {
+        let Some(v) = self.video.as_ref() else { return };
+        let slide = v.slide;
+        let audio_only = self.video_info(slide).is_some_and(|i| i.audio_only);
+        let duration = self
+            .clips
+            .get(&slide)
+            .and_then(|c| c.as_ref().ok())
+            .and_then(|c| c.probe.duration)
+            .unwrap_or(0.0);
+        let (pos, playing, paused, ended) = match &v.playing {
+            Some(p) => (
+                p.position(),
+                !p.is_paused() && !p.ended(),
+                p.is_paused(),
+                p.ended(),
+            ),
+            None => (0.0, false, false, false),
+        };
+        let armed = v.armed;
+        let error = v.error.clone();
+        let mut cmd: Option<osc::VideoCmd> = None;
+        ui.add_space(8.0);
+        Frame::new()
+            .fill(PANEL)
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let row = Vec2::new(ui.available_width(), 30.0);
+                ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
+                    let h = 30.0;
+                    let small = |text: &str, tip: &str, ui: &mut egui::Ui| {
+                        ui.add(
+                            egui::Button::new(RichText::new(text).size(14.0))
+                                .min_size(Vec2::new(44.0, h))
+                                .corner_radius(6),
+                        )
+                        .on_hover_text(tip)
+                        .clicked()
+                    };
+                    ui.label(
+                        RichText::new(if audio_only { "AUDIO" } else { "VIDEO" })
+                            .small()
+                            .strong()
+                            .color(if playing { CURRENT } else { MUTED }),
+                    );
+                    let r = ui
+                        .add(
+                            egui::Button::new("")
+                                .min_size(Vec2::new(44.0, h))
+                                .corner_radius(6),
+                        )
+                        .on_hover_text("Back to the start");
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, "Back to the start")
+                    });
+                    icon(ui, Icon::Restart, r.rect.center(), TEXT);
+                    if r.clicked() {
+                        cmd = Some(osc::VideoCmd::Restart);
+                    }
+                    if small("\u{2212}10", "10 seconds back", ui) {
+                        cmd = Some(osc::VideoCmd::Skip(-10.0));
+                    }
+                    let (label, tip, fill) = if playing {
+                        ("Pause", "Pause (the picture stays) – K", None)
+                    } else if armed {
+                        ("Play", "Start (like GO) – K", Some(GO))
+                    } else if ended {
+                        ("Again", "Play again from the start – K", None)
+                    } else if paused {
+                        ("Resume", "Play on from here – K", Some(GO))
+                    } else {
+                        ("Play", "Play – K", Some(GO))
+                    };
+                    let ink = if fill.is_some() { Color32::WHITE } else { TEXT };
+                    // Room on the left for the drawn symbol.
+                    let mut b = egui::Button::new(
+                        RichText::new(format!("     {label}"))
+                            .size(14.0)
+                            .strong()
+                            .color(ink),
+                    )
+                    .min_size(Vec2::new(116.0, h))
+                    .corner_radius(6);
+                    if let Some(f) = fill {
+                        b = b.fill(f);
+                    }
+                    let r = ui.add(b).on_hover_text(tip);
+                    let text_w = 7.5 * label.len() as f32 + 14.0;
+                    let c = pos2(r.rect.center().x - text_w / 2.0 - 2.0, r.rect.center().y);
+                    icon(ui, if playing { Icon::Pause } else { Icon::Play }, c, ink);
+                    if r.clicked() {
+                        cmd = Some(osc::VideoCmd::Toggle);
+                    }
+                    if small("+10", "10 seconds on", ui) {
+                        cmd = Some(osc::VideoCmd::Skip(10.0));
+                    }
+
+                    // Timeline: time so far | track | time left.
+                    let scrub = self.video.as_ref().and_then(|v| v.scrub);
+                    let shown = scrub.unwrap_or(pos);
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(media::fmt_time(shown))
+                            .monospace()
+                            .color(TEXT),
+                    );
+                    let right_w = 64.0;
+                    let w = (ui.available_width() - right_w - 8.0).max(60.0);
+                    let (r, resp) =
+                        ui.allocate_exact_size(Vec2::new(w, h), Sense::click_and_drag());
+                    let track = Rect::from_center_size(r.center(), Vec2::new(r.width(), 6.0));
+                    let p = ui.painter();
+                    p.rect_filled(track, 3.0, LINE);
+                    let frac = if duration > 0.0 {
+                        (shown / duration).clamp(0.0, 1.0) as f32
+                    } else {
+                        0.0
+                    };
+                    let done = Rect::from_min_max(
+                        track.min,
+                        pos2(track.left() + track.width() * frac, track.bottom()),
+                    );
+                    p.rect_filled(done, 3.0, if playing { CURRENT } else { MUTED });
+                    let knob = pos2(done.right(), track.center().y);
+                    let hot = resp.hovered() || resp.dragged();
+                    p.circle_filled(knob, if hot { 8.0 } else { 6.0 }, TEXT);
+                    let at = |x: f32| {
+                        (f64::from(((x - track.left()) / track.width()).clamp(0.0, 1.0))) * duration
+                    };
+                    if let Some(x) = resp.interact_pointer_pos().map(|p| p.x) {
+                        if resp.dragged() || resp.is_pointer_button_down_on() {
+                            if let Some(v) = self.video.as_mut() {
+                                v.scrub = Some(at(x));
+                            }
+                        }
+                    }
+                    if resp.drag_stopped() || resp.clicked() {
+                        let to = self
+                            .video
+                            .as_mut()
+                            .and_then(|v| v.scrub.take())
+                            .or_else(|| resp.interact_pointer_pos().map(|p| at(p.x)));
+                        if let Some(t) = to {
+                            cmd = Some(osc::VideoCmd::Seek(t));
+                        }
+                    }
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Slider, duration > 0.0, "Timeline")
+                    });
+                    let resp = resp.on_hover_text("Click or drag to go to a point");
+                    if let Some(hp) = resp.hover_pos() {
+                        if duration > 0.0 && !resp.dragged() {
+                            p.text(
+                                pos2(hp.x, track.top() - 8.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                media::fmt_time(at(hp.x)),
+                                egui::FontId::monospace(11.0),
+                                MUTED,
+                            );
+                        }
+                    }
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("-{}", media::fmt_time((duration - shown).max(0.0))))
+                            .monospace()
+                            .color(MUTED),
+                    );
+                });
+                if let Some(e) = error {
+                    ui.label(RichText::new(e).small().color(AMBER));
+                }
+            });
+        if let Some(c) = cmd {
+            self.video_command(c);
+        }
+    }
+
     /// The video overlays for drawing: (slide before, live slide).
     pub(super) fn overlays(&self) -> (Option<&Overlay>, Option<&Overlay>) {
         (
@@ -291,6 +565,7 @@ impl App {
     }
 
     /// Time left of the live video, and whether it plays.
+    /// (`true`: started and not at its end, so the time counts down; it may be paused.)
     pub(super) fn video_left(&self) -> Option<(f64, bool)> {
         let v = self.video.as_ref()?;
         match &v.playing {
@@ -302,6 +577,14 @@ impl App {
                 .and_then(|c| c.probe.duration)
                 .map(|d| (d, false)),
         }
+    }
+
+    /// The live video is paused.
+    pub(super) fn video_paused(&self) -> bool {
+        self.video
+            .as_ref()
+            .and_then(|v| v.playing.as_ref())
+            .is_some_and(|p| p.is_paused() && !p.ended())
     }
 
     /// Settings › Audio.
@@ -467,7 +750,8 @@ impl App {
         let Some(info) = self.video_info(i).cloned() else {
             return;
         };
-        section(ui, "Video");
+        let audio_only = self.video_info(i).is_some_and(|v| v.audio_only);
+        section(ui, if audio_only { "Audio" } else { "Video" });
         let clip = self.clips.get(&i).cloned();
         match &clip {
             Some(Ok(c)) => {

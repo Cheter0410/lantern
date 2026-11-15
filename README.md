@@ -17,14 +17,16 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
 - **Outputs:** full-screen on any display (pure picture: no cursor, no symbols, no menus) and NDI
   (needs the NDI runtime, e.g. with NDI Tools from ndi.video).
 - **Remote control (OSC, UDP 53100):** `/lantern/go`, `/lantern/back`, `/lantern/slide <n>`,
-  `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`.
+  `/lantern/first`, `/lantern/blackout [0|1]`, `/lantern/clear`; for the live slide's video or sound
+  `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`, `/video/seek <s>`,
+  `/video/skip <±s>`.
 - **On another computer:** Lantern announces itself on the network (Bonjour, `_lantern._udp`); in
   Show Master the Lantern cue lists it under *Network*. Settings › Network shows the name and the IP
   address. Timecode comes over the network too (RTP-MIDI), or as LTC by cable.
 - The settings of a presentation are kept next to it (`talk.pptx` → `talk.lantern`); a changed
   presentation is noticed and can be reloaded without losing them.
 
-Keys: Space, →, ↓, Page Down, Enter, N = GO+ · ←, ↑, Page Up, Backspace, P = GO− · B or . = blackout ·
+Keys: Space, →, ↓, Page Down, Enter, N = GO+ · ←, ↑, Page Up, Backspace, P = GO− · B or . = blackout · K = play / pause the video ·
 Home = first slide · Esc = close the slide settings · Ctrl/⌘+O = open · Ctrl/⌘+R = read the file again ·
 Ctrl/⌘+E = switch between Edit and Live.
 
@@ -36,7 +38,9 @@ timecode and OSC work as always. The mode is kept across restarts.
 with its sound. As in the file it starts by itself or with a click; per slide it can also start
 automatically or wait for GO (the GO button then says *Play video*), and at its end hold the last
 frame, loop or go on to the next slide. Volume per video, the sound fades out with the slide
-(Settings › Audio › Fade). In Live a *Video* cell shows the time left and the sound level.
+(Settings › Audio › Fade). In Live a *Video* cell shows the time left and the sound level. Sounds
+(audio clips) in slides play the same way. Under the Live picture a transport bar controls the live
+slide's video or sound: back to the start, ±10 s, play / pause (key K) and a timeline to click or drag.
 Lantern plays videos with FFmpeg, which the packages bring along (see `packaging/FFMPEG.txt`);
 when built from source it uses an installed `ffmpeg` (e.g. `brew install ffmpeg`).
 

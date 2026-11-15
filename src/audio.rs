@@ -28,6 +28,8 @@ pub struct Voice {
     /// Fades to silence, then leaves the mixer.
     stopping: AtomicBool,
     gone: AtomicBool,
+    /// Paused: fades out quickly, then takes nothing and the clock stands.
+    paused: AtomicBool,
 }
 
 #[derive(Clone, Copy)]
@@ -36,7 +38,12 @@ struct Ramp {
     target: f32,
     /// Change per frame.
     step: f32,
+    /// Pause fader (1 = playing, 0 = paused), multiplied with the gain.
+    hold: f32,
 }
+
+/// Pause and resume fade within this, so there is no click.
+const HOLD_SECS: f32 = 0.03;
 
 impl Voice {
     pub fn new(gain: f32) -> Arc<Voice> {
@@ -46,12 +53,25 @@ impl Voice {
                 gain,
                 target: gain,
                 step: 1.0,
+                hold: 1.0,
             }),
             played: AtomicU64::new(0),
             eof: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             gone: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
         })
+    }
+
+    /// Pause (fades out within a few milliseconds) or play on. `now`: no
+    /// fade (for a voice that has not played yet).
+    pub fn set_paused(&self, paused: bool, now: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        if now {
+            if let Ok(mut r) = self.ramp.lock() {
+                r.hold = if paused { 0.0 } else { 1.0 };
+            }
+        }
     }
 
     /// Add interleaved stereo samples.
@@ -156,30 +176,44 @@ impl Mixer {
                 let (Ok(mut buf), Ok(mut ramp)) = (v.buf.lock(), v.ramp.lock()) else {
                     continue;
                 };
-                let n = (buf.len() / 2).min(frames);
-                for f in 0..n {
+                let paused = v.paused.load(Ordering::Relaxed);
+                let hold_to = if paused { 0.0 } else { 1.0 };
+                let hold_step = 1.0 / (HOLD_SECS * self.rate() as f32).max(1.0);
+                let avail = (buf.len() / 2).min(frames);
+                let mut n = 0;
+                while n < avail {
+                    if paused && ramp.hold <= 0.0 {
+                        break;
+                    }
                     let (l, r) = (
                         buf.pop_front().unwrap_or(0.0),
                         buf.pop_front().unwrap_or(0.0),
                     );
-                    let g = ramp.gain;
-                    out[f * 2] += l * g;
-                    out[f * 2 + 1] += r * g;
+                    let g = ramp.gain * ramp.hold;
+                    out[n * 2] += l * g;
+                    out[n * 2 + 1] += r * g;
                     if ramp.gain < ramp.target {
                         ramp.gain = (ramp.gain + ramp.step).min(ramp.target);
                     } else if ramp.gain > ramp.target {
                         ramp.gain = (ramp.gain - ramp.step).max(ramp.target);
                     }
+                    if ramp.hold < hold_to {
+                        ramp.hold = (ramp.hold + hold_step).min(1.0);
+                    } else if ramp.hold > hold_to {
+                        ramp.hold = (ramp.hold - hold_step).max(0.0);
+                    }
+                    n += 1;
                 }
                 // The clock only moves on with sound actually played (or
                 // after the producer is done, so a short track can't hold it).
-                let moved = if n == 0 && v.eof.load(Ordering::Relaxed) {
+                let moved = if n == 0 && !paused && v.eof.load(Ordering::Relaxed) {
                     frames
                 } else {
                     n
                 };
                 v.played.fetch_add(moved as u64, Ordering::Relaxed);
-                let silent = ramp.gain <= 0.0 && ramp.target <= 0.0;
+                let silent =
+                    (ramp.gain <= 0.0 && ramp.target <= 0.0) || (paused && ramp.hold <= 0.0);
                 if (v.stopping.load(Ordering::Relaxed) && silent)
                     || (v.eof.load(Ordering::Relaxed) && buf.is_empty())
                 {

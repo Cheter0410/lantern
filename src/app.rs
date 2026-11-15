@@ -501,6 +501,7 @@ impl App {
             Command::Slide(i) => self.goto(Some(i)),
             Command::First => self.goto(Some(0)),
             Command::Clear => self.goto(None),
+            Command::Video(v) => self.video_command(v),
             Command::Blackout(v) => {
                 let on = v.unwrap_or(!self.player.blackout);
                 self.player.set_blackout(on);
@@ -700,6 +701,10 @@ impl App {
         });
         if mode {
             self.set_live(!self.live());
+        }
+        // K: play / pause the live slide's video or sound.
+        if ctx.input(|i| i.key_pressed(Key::K) && !i.modifiers.command) {
+            self.video_command(osc::VideoCmd::Toggle);
         }
         if (open || reload) && self.live() {
             self.locked();
@@ -1111,11 +1116,13 @@ impl App {
                                 ))
                                 .small()
                                 .monospace()
-                                .color(if playing {
-                                    CURRENT
-                                } else {
-                                    MUTED
-                                }),
+                                .color(
+                                    if playing && !self.video_paused() {
+                                        CURRENT
+                                    } else {
+                                        MUTED
+                                    },
+                                ),
                             )
                             .on_hover_text(if playing {
                                 "Video: time left"
@@ -1219,6 +1226,8 @@ impl App {
                 }
             });
         });
+        // The live slide's video or sound: play, pause, timeline.
+        self.video_transport(ui);
         ui.add_space(14.0);
         // Transport.
         // GO- and GO+ on the left; Blackout and Clear far away on the right,
@@ -1446,7 +1455,9 @@ impl App {
             size,
         );
         // Video: time left, and the sound level along the bottom.
+        let paused = self.video_paused();
         let (text, color, accent) = match self.video_left() {
+            Some((left, true)) if paused => (format!("-{}", media::fmt_time(left)), MUTED, None),
             Some((left, true)) => (format!("-{}", media::fmt_time(left)), TEXT, Some(CURRENT)),
             Some((len, false)) => (media::fmt_time(len), MUTED, None),
             None => ("-:--".to_string(), MUTED, None),
@@ -1461,6 +1472,8 @@ impl App {
                 true,
                 NEXT,
             );
+        } else if paused {
+            badge(ui, free.right(), free.center().y, "PAUSED", true, AMBER);
         }
         let m = Rect::from_min_max(
             pos2(cells[4].left() + 12.0, cells[4].bottom() - 12.0),
@@ -2044,6 +2057,7 @@ impl App {
                     ("Space · → · Page Down · Enter", "GO+ (next slide)"),
                     ("← · Page Up · Backspace", "GO\u{2212} (slide back)"),
                     ("B", "Blackout"),
+                    ("K", "Play / pause the video or sound"),
                     ("Home", "First slide"),
                     ("Esc", "Close the slide settings"),
                     ("Ctrl/Cmd+E", "Switch between Edit and Live"),

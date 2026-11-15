@@ -40,6 +40,8 @@ pub struct VideoInfo {
     pub looped: bool,
     /// 0..1.
     pub volume: f32,
+    /// A sound (audio clip), no picture to show.
+    pub audio_only: bool,
 }
 
 /// How a slide appears (PowerPoint's many effects become a fade).
@@ -202,9 +204,12 @@ fn video(
 ) -> Option<VideoInfo> {
     let pic = sd.descendants().find(|n| {
         has_tag(n, "pic")
-            && n.descendants()
-                .any(|d| has_tag(&d, "videoFile") || has_tag(&d, "media"))
+            && n.descendants().any(|d| {
+                has_tag(&d, "videoFile") || has_tag(&d, "audioFile") || has_tag(&d, "media")
+            })
     })?;
+    let audio_only = pic.descendants().any(|d| has_tag(&d, "audioFile"))
+        && !pic.descendants().any(|d| has_tag(&d, "videoFile"));
     // Prefer the embedded file (p14:media r:embed), else the a:videoFile link.
     let rel = |tag: &str, attr: &str| {
         pic.descendants()
@@ -213,7 +218,9 @@ fn video(
             .and_then(|id| srels.get(id))
             .map(|(_, t)| t.clone())
     };
-    let target = rel("media", "embed").or_else(|| rel("videoFile", "link"))?;
+    let target = rel("media", "embed")
+        .or_else(|| rel("videoFile", "link"))
+        .or_else(|| rel("audioFile", "link"))?;
     let source = if target.contains("://") || target.starts_with('/') || target.contains(':') {
         // file:///… or an absolute path.
         let t = target.strip_prefix("file://").unwrap_or(&target);
@@ -227,7 +234,7 @@ fn video(
     let id = c_nv.and_then(|n| n.attribute("id")).unwrap_or("");
     let name = c_nv
         .and_then(|n| n.attribute("name"))
-        .unwrap_or("Video")
+        .unwrap_or(if audio_only { "Audio" } else { "Video" })
         .to_string();
     let xfrm = pic.descendants().find(|d| has_tag(d, "xfrm"));
     let num = |tag: &str, a: &str| {
@@ -279,6 +286,7 @@ fn video(
         auto,
         looped,
         volume,
+        audio_only,
     })
 }
 
@@ -424,11 +432,35 @@ mod tests {
         assert!(v.auto, "starts after the slide (afterEffect)");
         assert!(!v.looped);
         assert!((v.volume - 0.8).abs() < 1e-6);
+        assert!(!v.audio_only);
         assert!((v.rect[0] - 0.5).abs() < 0.01 && (v.rect[2] - 0.425).abs() < 0.01);
         let to = std::env::temp_dir().join(format!("lantern-media-{}.mp4", std::process::id()));
         extract(&p, "ppt/media/media1.mp4", &to).unwrap();
         assert!(std::fs::metadata(&to).unwrap().len() > 10_000);
         let _ = std::fs::remove_file(to);
+    }
+
+    #[test]
+    fn reads_an_audio_clip() {
+        let x = r#"<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r" xmlns:p14="q"><p:cSld><p:spTree>
+<p:pic><p:nvPicPr><p:cNvPr id="4" name="song.mp3"/><p:nvPr><a:audioFile r:link="rId2"/>
+<p:extLst><p:ext><p14:media r:embed="rId3"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>
+<p:spPr><a:xfrm><a:off x="100" y="100"/><a:ext cx="50" cy="50"/></a:xfrm></p:spPr></p:pic>
+</p:spTree></p:cSld></p:sld>"#;
+        let doc = roxmltree::Document::parse(x).unwrap();
+        let mut rels = HashMap::new();
+        rels.insert(
+            "rId3".to_string(),
+            ("media".to_string(), "ppt/media/media1.mp3".to_string()),
+        );
+        let v = video(&doc, &rels, (1000, 500)).unwrap();
+        assert!(v.audio_only);
+        assert_eq!(v.name, "song.mp3");
+        assert_eq!(
+            v.source,
+            MediaSource::Embedded("ppt/media/media1.mp3".into())
+        );
+        assert!(!v.auto, "plays on click");
     }
 
     #[test]

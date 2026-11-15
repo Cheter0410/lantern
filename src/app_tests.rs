@@ -253,6 +253,10 @@ fn live_mode_locks_the_show() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn clip_now(a: &App) -> Option<&crate::media::Playing> {
+    a.video.as_ref().and_then(|v| v.playing.as_ref())
+}
+
 #[test]
 fn plays_the_video_of_a_pptx() {
     if crate::office::find().is_none() || crate::media::ffmpeg().is_none() {
@@ -322,6 +326,46 @@ fn plays_the_video_of_a_pptx() {
     let (left, playing) = h.state().video_left().expect("time left");
     assert!(playing && left < len, "counts down: {left} of {len}");
     shots.take(&mut h, "7-video-playing");
+
+    // Transport: pause holds the time, the timeline jumps, K plays on.
+    h.get_by_label_contains("Pause").click();
+    h.run_steps(3);
+    assert!(clip_now(h.state()).expect("playing").is_paused());
+    let held = clip_now(h.state()).expect("playing").position();
+    std::thread::sleep(Duration::from_millis(400));
+    h.run_steps(3);
+    let now = clip_now(h.state()).expect("playing").position();
+    assert!((now - held).abs() < 0.05, "paused: {held} -> {now}");
+    assert!(h.query_by_label_contains("Resume").is_some());
+    // Click at three quarters of the timeline (a 4 s clip: about 3 s).
+    let line = h.get_by_label("Timeline").rect();
+    click_at(
+        &h,
+        egui::pos2(line.left() + line.width() * 0.75, line.center().y),
+    );
+    run_until(&mut h, "the jump", |a| {
+        a.video
+            .as_ref()
+            .and_then(|v| v.playing.as_ref())
+            .is_some_and(|p| (p.position() - 3.0).abs() < 0.3)
+    });
+    assert!(
+        clip_now(h.state()).expect("playing").is_paused(),
+        "stays paused"
+    );
+    shots.take(&mut h, "7b-video-paused");
+    h.key_press(Key::K);
+    h.run_steps(3);
+    assert!(
+        !clip_now(h.state()).expect("playing").is_paused(),
+        "K plays on"
+    );
+    h.get_by_label_contains("\u{2212}10").click();
+    h.run_steps(3);
+    assert!(
+        clip_now(h.state()).expect("playing").position() < 0.5,
+        "back to the start"
+    );
 
     // Settings › Audio.
     h.state_mut().set_live(false);

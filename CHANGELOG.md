@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+- Transport for the live slide's video or sound, in a bar under the Live picture: back to the start,
+  10 s back, play / pause / resume / again, 10 s on, and a timeline to click or drag, with the time
+  played and the time left. Pausing keeps the picture and fades the sound in a few milliseconds
+  (no click); jumping keeps it paused or playing. Key K plays and pauses.
+- Sounds (audio clips, e.g. MP3) in slides play too, with the same settings and transport.
+- Clock strip: the video cell shows PAUSED while paused.
+- OSC: `/lantern/video/play`, `/video/pause`, `/video/toggle`, `/video/restart`,
+  `/video/seek <seconds>`, `/video/skip <seconds>`.
+
 ## 0.3.1
 
 - Timecode in: MIDI timecode (MTC) on a MIDI input of this computer, e.g. the IAC bus on a Mac

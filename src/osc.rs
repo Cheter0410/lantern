@@ -3,6 +3,9 @@
 //! `/lantern/go` (or `/lantern/next`), `/lantern/back`, `/lantern/slide <n>`
 //! (from 1), `/lantern/first`, `/lantern/blackout [0|1]` (no argument =
 //! toggle), `/lantern/clear` (back to black before the first slide).
+//! The live slide's video or sound: `/lantern/video/play`, `/video/pause`,
+//! `/video/toggle`, `/video/restart`, `/video/seek <seconds>`,
+//! `/video/skip <seconds, negative = back>`.
 //! The `/lantern` prefix may be left out.
 
 use rosc::{OscPacket, OscType};
@@ -20,6 +23,20 @@ pub enum Command {
     First,
     Blackout(Option<bool>),
     Clear,
+    Video(VideoCmd),
+}
+
+/// Transport of the live slide's video (or sound).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VideoCmd {
+    Play,
+    Pause,
+    Toggle,
+    Restart,
+    /// To this many seconds.
+    Seek(f64),
+    /// By this many seconds (negative: back).
+    Skip(f64),
 }
 
 fn number(args: &[OscType]) -> Option<f64> {
@@ -47,6 +64,12 @@ pub fn parse(addr: &str, args: &[OscType]) -> Option<Command> {
             (n >= 1.0).then(|| Command::Slide(n as usize - 1))
         }
         "/blackout" => Some(Command::Blackout(number(args).map(|v| v >= 0.5))),
+        "/video/play" | "/video/resume" => Some(Command::Video(VideoCmd::Play)),
+        "/video/pause" => Some(Command::Video(VideoCmd::Pause)),
+        "/video" | "/video/toggle" => Some(Command::Video(VideoCmd::Toggle)),
+        "/video/restart" => Some(Command::Video(VideoCmd::Restart)),
+        "/video/seek" => Some(Command::Video(VideoCmd::Seek(number(args)?.max(0.0)))),
+        "/video/skip" => Some(Command::Video(VideoCmd::Skip(number(args)?))),
         _ => {
             // `/lantern/slide/3`
             let n = a.strip_prefix("/slide/")?.parse::<usize>().ok()?;
@@ -123,6 +146,19 @@ mod tests {
     #[test]
     fn addresses() {
         assert_eq!(parse("/lantern/go", &[]), Some(Command::Go));
+        assert_eq!(
+            parse("/lantern/video/pause", &[]),
+            Some(Command::Video(VideoCmd::Pause))
+        );
+        assert_eq!(
+            parse("/video/seek", &[OscType::Float(12.5)]),
+            Some(Command::Video(VideoCmd::Seek(12.5)))
+        );
+        assert_eq!(
+            parse("/lantern/video/skip", &[OscType::Int(-10)]),
+            Some(Command::Video(VideoCmd::Skip(-10.0)))
+        );
+        assert_eq!(parse("/lantern/video/seek", &[]), None);
         assert_eq!(parse("/next", &[]), Some(Command::Go));
         assert_eq!(
             parse("/lantern/slide", &[OscType::Int(3)]),
