@@ -685,7 +685,10 @@ impl App {
             },
         );
         if borderless {
-            crate::platform::raise_output_windows("Lantern Output");
+            crate::platform::raise_output_windows(
+                "Lantern Output",
+                [d.pos[0], d.pos[1], d.size[0], d.size[1]],
+            );
         }
         if closed {
             self.show.output.display = None;
