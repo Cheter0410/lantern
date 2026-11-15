@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+
+- release.sh: give an empty release repo a README before publishing
+
 ## 0.11.0
 
 - Builds and animations from PowerPoint: shapes and bullet points that come (or go) with a click
