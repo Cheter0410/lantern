@@ -226,9 +226,21 @@ built_files() {
   fi
 }
 
+# Ein Release braucht ein Tag und das Tag einen Commit: ein ganz leeres
+# Release-Repo ("Repository is empty") bekommt eine README.
+ensure_releases_repo() {
+  gh api "repos/$RELEASES/commits?per_page=1" >/dev/null 2>&1 && return 0
+  local readme
+  readme=$(printf '# %s – Downloads\n\nInstallers for %s are attached to the [releases](https://github.com/%s/releases).\n' \
+    "$APP" "$APP" "$RELEASES" | base64 | tr -d '\n')
+  ui_run "Release-Repo vorbereiten (README)" gh api -X PUT "repos/$RELEASES/contents/README.md" \
+    -f message="README" -f content="$readme"
+}
+
 # Sichtbar machen (ein Entwurf wird veröffentlicht) und sagen, was noch fehlt.
 publish() {
   if [ "$(release_state "$1")" = draft ]; then
+    ensure_releases_repo
     ui_run "Veröffentlichen" gh release edit "v$1" -R "$RELEASES" --draft=false --latest
   fi
   if show_status "$1"; then
