@@ -24,7 +24,12 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   presentation is noticed and can be reloaded without losing them.
 
 Keys: Space, →, ↓, Page Down, Enter, N = GO · ←, ↑, Page Up, Backspace, P = back · B or . = blackout ·
-Home = first slide · Esc = close the slide settings · Ctrl/⌘+O = open · Ctrl/⌘+R = read the file again.
+Home = first slide · Esc = close the slide settings · Ctrl/⌘+O = open · Ctrl/⌘+R = read the file again ·
+Ctrl/⌘+E = switch between Edit and Live.
+
+**Edit and Live:** in *Live* (top right) the show is locked against accidental changes: no slide
+settings, no opening, reloading or dropping files, settings only to look at. GO, back, blackout,
+timecode and OSC work as always. The mode is kept across restarts.
 
 Not yet: videos and animations inside slides (a slide shows its final state).
 

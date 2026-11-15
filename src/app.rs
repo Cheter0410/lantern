@@ -36,9 +36,15 @@ const HOVER: Color32 = Color32::from_rgb(26, 29, 35);
 #[serde(default)]
 struct Settings {
     last: Option<PathBuf>,
+    /// Live mode: the show runs, nothing about it can be changed by accident.
+    live: bool,
 }
 
 fn settings_file() -> Option<PathBuf> {
+    // Tests keep their settings away from the real ones.
+    if let Some(d) = std::env::var_os("LANTERN_CONFIG_DIR") {
+        return Some(PathBuf::from(d).join("settings.json"));
+    }
     Some(dirs::config_dir()?.join("lantern").join("settings.json"))
 }
 
@@ -176,6 +182,29 @@ impl App {
 
     fn note(&mut self, m: impl Into<String>) {
         self.message = Some((m.into(), Instant::now()));
+    }
+
+    fn live(&self) -> bool {
+        self.settings.live
+    }
+
+    /// Edit or Live. Live closes the slide settings and keeps the show as it is.
+    fn set_live(&mut self, on: bool) {
+        if self.settings.live == on {
+            return;
+        }
+        self.settings.live = on;
+        self.settings.save();
+        if on {
+            self.selected = None;
+            self.note("Live – Änderungen gesperrt");
+        } else {
+            self.note("Bearbeiten");
+        }
+    }
+
+    fn locked(&mut self) {
+        self.note("Im Live-Modus gesperrt – zum Ändern auf „Bearbeiten“ (Strg/Cmd+E)");
     }
 
     // ---------------------------------------------------------------- files
@@ -574,7 +603,7 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (go, back, black, first, open, settings, reload, escape) = ctx.input(|i| {
+        let (go, back, black, first, open, settings, reload, escape, mode) = ctx.input(|i| {
             let any = |ks: &[Key]| ks.iter().any(|k| i.key_pressed(*k));
             (
                 any(&[
@@ -598,9 +627,15 @@ impl App {
                 i.modifiers.command && i.key_pressed(Key::Comma),
                 i.modifiers.command && i.key_pressed(Key::R),
                 i.key_pressed(Key::Escape),
+                i.modifiers.command && i.key_pressed(Key::E),
             )
         });
-        if reload && self.deck.is_some() {
+        if mode {
+            self.set_live(!self.live());
+        }
+        if (open || reload) && self.live() {
+            self.locked();
+        } else if reload && self.deck.is_some() {
             self.load(ctx);
         }
         if escape {
@@ -623,7 +658,7 @@ impl App {
         if first {
             self.goto(Some(0));
         }
-        if open {
+        if open && !self.live() {
             self.pick_file(ctx);
         }
         if settings {
@@ -717,18 +752,23 @@ impl App {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(flat_button("Einstellungen"))
-                    .on_hover_text("Ausgänge, Timecode, Netzwerk (Strg/⌘+,)")
+                    .on_hover_text("Ausgänge, Timecode, Netzwerk (Strg/Cmd+,)")
                     .clicked()
                 {
                     self.settings_open = !self.settings_open;
                 }
-                if ui
-                    .add(flat_button("Öffnen"))
-                    .on_hover_text("PowerPoint, Keynote, OpenDocument oder PDF (Strg/⌘+O)")
-                    .clicked()
+                if !self.live()
+                    && ui
+                        .add(flat_button("Öffnen"))
+                        .on_hover_text("PowerPoint, Keynote, OpenDocument oder PDF (Strg/Cmd+O)")
+                        .clicked()
                 {
                     self.pick_file(&ctx);
                 }
+                ui.add_space(4.0);
+                let mut live = self.live();
+                mode_switch(ui, &mut live);
+                self.set_live(live);
                 ui.add_space(12.0);
                 ui.label(RichText::new(clock()).monospace().size(15.0).color(MUTED));
                 ui.add_space(8.0);
@@ -928,7 +968,7 @@ impl App {
                     }
                 }
             });
-        if let Some(i) = clicked {
+        if let Some(i) = clicked.filter(|_| !self.live()) {
             // Clicking the selected slide again closes its settings.
             self.selected = if self.selected == Some(i) {
                 None
@@ -1337,13 +1377,25 @@ impl App {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.add_space(6.0);
+                let live = self.live();
+                if live {
+                    ui.label(
+                        RichText::new(
+                            "Live: nur ansehen. Zum Ändern auf „Bearbeiten“ wechseln (Strg/Cmd+E).",
+                        )
+                        .color(LIVE),
+                    );
+                    ui.add_space(6.0);
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match self.settings_tab {
-                        SettingsTab::Output => self.settings_output(ui),
-                        SettingsTab::Timecode => self.settings_timecode(ui),
-                        SettingsTab::Network => self.settings_network(ui),
-                        SettingsTab::Program => self.settings_program(ui),
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(!live, |ui| match self.settings_tab {
+                            SettingsTab::Output => self.settings_output(ui),
+                            SettingsTab::Timecode => self.settings_timecode(ui),
+                            SettingsTab::Network => self.settings_network(ui),
+                            SettingsTab::Program => self.settings_program(ui),
+                        });
                     });
             });
         self.settings_open = open;
@@ -1629,7 +1681,7 @@ impl App {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.deck.is_some(), egui::Button::new("Neu einlesen"))
-                .on_hover_text("Strg/⌘+R")
+                .on_hover_text("Strg/Cmd+R")
                 .clicked()
             {
                 self.load(&ctx);
@@ -1658,6 +1710,7 @@ impl App {
                     ("B", "Blackout"),
                     ("Pos1", "Erste Folie"),
                     ("Esc", "Folien-Einstellungen schließen"),
+                    ("Strg/Cmd+E", "Bearbeiten / Live umschalten"),
                 ] {
                     ui.label(RichText::new(k).small());
                     ui.label(RichText::new(what).small().color(MUTED));
@@ -1726,7 +1779,13 @@ impl App {
             banner(ui, TC, |ui| {
                 ui.label("Die Präsentation wurde geändert.");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Neu einlesen").clicked() {
+                    if self.live() {
+                        ui.label(
+                            RichText::new("Neu einlesen geht im Modus „Bearbeiten“")
+                                .small()
+                                .color(MUTED),
+                        );
+                    } else if ui.button("Neu einlesen").clicked() {
                         self.load(&ctx);
                     }
                 });
@@ -1926,6 +1985,41 @@ fn tool_button(text: &str, on: Option<Color32>, h: f32) -> egui::Button<'static>
     .min_size(Vec2::new(104.0, h))
 }
 
+/// Bearbeiten | Live. Live is painted green so it is clear the show is locked.
+fn mode_switch(ui: &mut egui::Ui, live: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        // Right-to-left layout: "Live" first so it ends up on the right.
+        for (v, label, on_fill, tip) in [
+            (
+                true,
+                "Live",
+                LIVE,
+                "Show läuft: Folien-Einstellungen, Öffnen und Einstellungen gesperrt (Strg/Cmd+E)",
+            ),
+            (
+                false,
+                "Bearbeiten",
+                AMBER,
+                "Folien, Ausgänge und Timecode einrichten (Strg/Cmd+E)",
+            ),
+        ] {
+            let on = *live == v;
+            let b = egui::Button::new(RichText::new(label).strong().color(if on {
+                Color32::BLACK
+            } else {
+                MUTED
+            }))
+            .fill(if on { on_fill } else { CARD })
+            .stroke(Stroke::NONE)
+            .corner_radius(6);
+            if ui.add(b).on_hover_text(tip).clicked() {
+                *live = v;
+            }
+        }
+    });
+}
+
 /// Side-by-side choices, one of them selected.
 fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)]) {
     ui.horizontal(|ui| {
@@ -2048,7 +2142,11 @@ impl eframe::App for App {
                 .find(|p| !p.as_os_str().is_empty())
         });
         if let Some(p) = dropped {
-            self.open(&p, &ctx);
+            if self.live() {
+                self.locked();
+            } else {
+                self.open(&p, &ctx);
+            }
         }
         self.tc.apply(&self.show.timecode.clone());
         self.update_osc(&ctx);
@@ -2071,7 +2169,12 @@ impl eframe::App for App {
             .frame(
                 Frame::new()
                     .fill(PANEL)
-                    .inner_margin(Margin::symmetric(14, 8)),
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .stroke(if self.live() {
+                        Stroke::new(1.0, LIVE)
+                    } else {
+                        Stroke::NONE
+                    }),
             )
             .exact_size(46.0)
             .show(ui, |ui| self.top_bar(ui));
@@ -2086,7 +2189,7 @@ impl eframe::App for App {
                 .min_size(220.0)
                 .resizable(true)
                 .show(ui, |ui| self.slide_list(ui));
-            if self.selected.is_some() {
+            if self.selected.is_some() && !self.live() {
                 egui::Panel::right("inspector")
                     .frame(Frame::new().fill(PANEL).inner_margin(Margin::same(14)))
                     .default_size(290.0)
@@ -2124,3 +2227,7 @@ impl eframe::App for App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
