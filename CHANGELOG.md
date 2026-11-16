@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.5
+
+- The macOS Finder files (`.DS_Store`) are no longer in the repository, so installing no longer reports local changes.
+
 ## 0.11.4
 
 - MIDI timecode on Linux: the chosen MIDI input is found again when ALSA gives it another client
