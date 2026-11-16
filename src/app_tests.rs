@@ -724,6 +724,45 @@ fn output_problems_show_in_the_top_bar() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The stage display as NDI pictures: drawn off screen on the GPU with the same layout as the
+/// window, the slide and the countdown in it.
+#[test]
+fn stage_display_renders_off_screen_for_ndi() {
+    let dir = temp_dir("stage-ndi");
+    let mut h = harness(&dir);
+    run_until(&mut h, "the slides", |a| a.slides.len() == 3);
+    h.key_press(Key::Space);
+    run_until(&mut h, "the pictures", |a| a.fulls.contains_key(&0));
+    h.state_mut().stage.message = crate::stage::Message::new("Two minutes");
+    let rs = egui_kittest::wgpu::create_render_state(
+        egui_kittest::wgpu::default_wgpu_setup(),
+        eframe::egui_wgpu::RendererOptions::default(),
+    );
+    let mut r = super::stagewin::StageRender::new(&rs, (1280, 720));
+    let (scene, pics) = (h.state().stage_scene(), h.state().stage_pics());
+    assert!(pics.cur.is_some(), "the slide now goes along");
+    let px = r.draw_now(scene, pics).expect("a picture");
+    assert_eq!(px.len(), 1280 * 720 * 4);
+    if let Some(d) = std::env::var_os("LANTERN_SHOTS").map(PathBuf::from) {
+        let _ = std::fs::create_dir_all(&d);
+        if let Some(img) = image::RgbaImage::from_raw(1280, 720, px.clone()) {
+            let _ = img.save(d.join("st4-stage-ndi.png"));
+        }
+    }
+    let at = |x: usize, y: usize| {
+        let i = (y * 1280 + x) * 4;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    assert_eq!(at(2, 2), [6, 7, 9], "the stage background in the corner");
+    // The message bar is amber (flashing towards white at first) under the clocks.
+    let amber = (0..720).any(|y| {
+        let [r, g, b] = at(640, y);
+        r > 240 && g > 180 && u16::from(r) > u16::from(b) + 30
+    });
+    assert!(amber, "the message is on the picture");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The stage display: message and countdown from under the notes (also in
 /// Live) and over OSC; the picture for the stage with notes, now and next.
 #[test]

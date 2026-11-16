@@ -400,6 +400,112 @@ impl Sender {
     }
 }
 
+/// Sends ready-made pictures (the stage display) as an NDI source: always the newest one, as often
+/// as `fps` says. Without receivers nothing goes over the network.
+pub struct FrameSender {
+    frame: Arc<Mutex<Option<Arc<Vec<u8>>>>>,
+    stop: Arc<AtomicBool>,
+    receivers: Arc<AtomicI32>,
+    pub name: String,
+    pub size: (u32, u32),
+}
+
+impl Drop for FrameSender {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl FrameSender {
+    pub fn start(name: &str, w: u32, h: u32, fps: u32) -> Result<FrameSender, String> {
+        let api = api()?;
+        let frame: Arc<Mutex<Option<Arc<Vec<u8>>>>> = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let receivers = Arc::new(AtomicI32::new(-1));
+        let (frame2, stop2, receivers2) = (frame.clone(), stop.clone(), receivers.clone());
+        let cname = CString::new(name).map_err(|_| "Invalid NDI name")?;
+        let fps = fps.clamp(1, 60);
+        std::thread::Builder::new()
+            .name("lantern-ndi-stage".into())
+            .spawn(move || {
+                let cfg = SendCreate {
+                    name: cname.as_ptr(),
+                    groups: std::ptr::null(),
+                    clock_video: true,
+                    clock_audio: false,
+                };
+                // SAFETY: valid settings; the sender is destroyed below.
+                let snd = unsafe { (api.send_create)(&cfg) };
+                if snd.is_null() {
+                    return;
+                }
+                let black = Arc::new(compose_black(w, h));
+                let mut counted = Instant::now() - Duration::from_secs(10);
+                while !stop2.load(Ordering::Relaxed) {
+                    if let Some(f) = api
+                        .send_connections
+                        .filter(|_| counted.elapsed().as_secs() >= 1)
+                    {
+                        counted = Instant::now();
+                        // SAFETY: `snd` is alive; timeout 0 does not wait.
+                        receivers2.store(unsafe { f(snd, 0) }, Ordering::Relaxed);
+                    }
+                    let pic = frame2
+                        .lock()
+                        .ok()
+                        .and_then(|f| f.clone())
+                        .filter(|p| p.len() == (w * h * 4) as usize)
+                        .unwrap_or_else(|| black.clone());
+                    let f = VideoFrame {
+                        xres: w as i32,
+                        yres: h as i32,
+                        fourcc: FOURCC_RGBX,
+                        rate_n: (fps * 1000) as i32,
+                        rate_d: 1000,
+                        aspect: w as f32 / h as f32,
+                        format: 1, // progressive
+                        timecode: SYNTHESIZE,
+                        data: pic.as_ptr(),
+                        stride: (w * 4) as i32,
+                        metadata: std::ptr::null(),
+                        timestamp: 0,
+                    };
+                    // SAFETY: the frame points into `pic`, alive during the (synchronous,
+                    // clocked) call.
+                    unsafe { (api.send_video)(snd, &f) };
+                }
+                // SAFETY: created above, no longer used.
+                unsafe { (api.send_destroy)(snd) };
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(FrameSender {
+            frame,
+            stop,
+            receivers,
+            name: name.to_string(),
+            size: (w, h),
+        })
+    }
+
+    /// Receivers watching, when the runtime says.
+    pub fn receivers(&self) -> Option<u32> {
+        u32::try_from(self.receivers.load(Ordering::Relaxed)).ok()
+    }
+
+    /// The next picture to send (RGBA, `size`).
+    pub fn set(&self, rgba: Arc<Vec<u8>>) {
+        if let Ok(mut g) = self.frame.lock() {
+            *g = Some(rgba);
+        }
+    }
+}
+
+fn compose_black(w: u32, h: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    compose(None, None, 1.0, 1.0, w, h, &mut v);
+    v
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

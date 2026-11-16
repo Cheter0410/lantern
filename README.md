@@ -24,11 +24,14 @@ in PowerPoint, Keynote or LibreOffice. Written in Rust (egui), for macOS, Window
   and delay, smooth motion for judder and tearing); the top bar shows it is on air and turns it off.
 - **Stage display:** for the speaker or stage manager on a display of its own (Settings › Stage):
   time, slide, timecode and a countdown, a message from the operator, the slide now and next, and
-  the notes in large type. Messages and the countdown are set under the notes (also in Live) or
-  over OSC.
+  the notes in large type. Messages and the countdown are set under the notes (also in Live), in
+  Settings › Stage, from the web remote or over OSC. The stage display can also go out as its own
+  NDI source (720p or 1080p, sent only while a receiver watches – about 60 / 120 Mbit/s each) and
+  opens in any browser at `http://lantern.local:<port>/stage`, e.g. on an iPad (a few KB/s).
 - **Web remote:** a page for a phone or tablet in the same network (Settings › Network, with a QR
   code): GO+, GO−, Blackout, the slide now and next, notes, video play / pause, the countdown and
-  stage messages; optional PIN.
+  stage messages; optional PIN. Lantern announces itself as `lantern.local` (mDNS). On a computer
+  the page fits the window without scrolling.
 - **Show log:** every cue with time of day, timecode and how it came (GO, timecode, OSC, web
   remote), blackout, videos, stage messages, problems and when they were fixed, and notes typed in
   live; written to `Logs/<date>.txt` in the show folder (Ctrl/Cmd+L).

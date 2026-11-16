@@ -274,6 +274,20 @@ pub struct StageCfg {
     pub timer_minutes: u32,
     /// Countdown amber from this many minutes left.
     pub warn_minutes: u32,
+    /// Also send the stage display as an NDI source (for a monitor or recorder anywhere in the
+    /// network, without a cable from this computer).
+    pub ndi: bool,
+    pub ndi_name: String,
+    /// Height of the NDI picture: 720 or 1080 (16:9).
+    pub ndi_height: u32,
+}
+
+impl StageCfg {
+    /// The NDI picture size (16:9).
+    pub fn ndi_size(&self) -> (u32, u32) {
+        let h = if self.ndi_height >= 1080 { 1080 } else { 720 };
+        (h * 16 / 9, h)
+    }
 }
 
 impl Default for StageCfg {
@@ -285,6 +299,9 @@ impl Default for StageCfg {
             notes_size: 44.0,
             timer_minutes: 30,
             warn_minutes: 5,
+            ndi: false,
+            ndi_name: "Lantern Stage".into(),
+            ndi_height: 1080,
         }
     }
 }

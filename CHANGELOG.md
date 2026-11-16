@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0
+
+- Stage display over NDI: Settings › Stage › NDI sends the stage display as its own NDI source
+  (name and 720p / 1080p to choose). It is drawn off screen like the stage window and only sent
+  while a receiver is connected (about 60 Mbit/s at 720p, 120 Mbit/s at 1080p per receiver).
+- Stage display in a browser: `/stage` on the web remote's address shows the stage display full
+  screen, e.g. on an iPad (uses the web remote's PIN; only a few KB/s).
+- The web remote is announced as `http://lantern.local:<port>` (like Show Master); Settings shows
+  that address.
+- The web remote fits a computer window without scrolling (two columns); it links to the stage view.
+- The countdown can be started, paused and reset in Settings › Stage, and its controls under the
+  notes show whenever the stage display is on (display, NDI or browser).
+
 ## 0.11.6
 
 - CLAUDE.md: the note about tracked `.DS_Store` files is gone (they are no longer in the repository).

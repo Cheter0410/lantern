@@ -162,6 +162,8 @@ pub struct App {
     web_rx: Receiver<Command>,
     ndi: Option<ndi::Sender>,
     ndi_error: Option<String>,
+    /// The stage display as an NDI source.
+    stage_out: stagewin::StageOut,
     selected: Option<usize>,
     install: InstallState,
     office_found: Option<PathBuf>,
@@ -239,6 +241,7 @@ impl App {
             web_rx,
             ndi: None,
             ndi_error: None,
+            stage_out: stagewin::StageOut::default(),
             selected: None,
             install: Arc::default(),
             office_found: office::find(),
@@ -1418,7 +1421,7 @@ impl App {
         let below = 60.0
             + 70.0
             + 110.0
-            + if self.show.stage.display.is_some() {
+            + if self.stage_shown() {
                 72.0
             } else {
                 0.0
@@ -1580,7 +1583,7 @@ impl App {
         self.transport(ui, next);
         ui.add_space(14.0);
         // Speaker notes of the live slide.
-        let stage_on = self.show.stage.display.is_some();
+        let stage_on = self.stage_shown();
         let notes = self
             .player
             .current
@@ -3087,6 +3090,7 @@ impl eframe::App for App {
         self.receive_pictures(&ctx);
         self.want_pictures();
         self.update_ndi();
+        self.update_stage_ndi(frame);
         if self.screen == start::Screen::Main {
             self.update_health();
         }
@@ -3099,7 +3103,8 @@ impl eframe::App for App {
             .tc
             .rtp_port()
             .map(|p| (self.show.timecode.rtp_name.clone(), p));
-        self.net.update(osc_port, rtp);
+        let web_port = self.web.server.as_ref().map(|w| w.port).filter(|p| *p != 0);
+        self.net.update(osc_port, rtp, web_port);
 
         match self.screen {
             start::Screen::Main => self.main_window(ui),

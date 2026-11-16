@@ -75,6 +75,23 @@
   .overlay input { font: 600 26px ui-monospace, Menlo, monospace; text-align: center; width: 100%; margin: 14px 0;
     padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); letter-spacing: .3em; }
   .overlay button { width: 100%; background: var(--amber); color: #000; font-weight: 700; }
+  .stagelink { color: var(--muted); font-size: 13px; text-decoration: none; border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 8px; }
+  /* A computer or a tablet across: two columns that fit the window, nothing to scroll. Pictures and
+     GO on the left; countdown, message and notes on the right (the notes scroll in their box). */
+  @media (min-width: 860px) and (min-height: 500px) {
+    html, body { height: 100%; overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    header { flex: none; }
+    .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(300px, 1fr); gap: 18px; }
+    .left, .right { min-height: 0; display: flex; flex-direction: column; }
+    .right > .section:first-child { margin-top: 0; }
+    .frame { max-width: calc((100vh - 330px) * 16 / 9); }
+    .next .frame { max-width: calc((100vh - 330px) * 16 / 9 * .62); }
+    .notesSection { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .notes { max-height: none; flex: 1; min-height: 0; }
+    details summary { margin-top: 10px; }
+  }
   .lost { position: fixed; left: 14px; right: 14px; bottom: max(14px, env(safe-area-inset-bottom)); background: var(--red);
     color: #fff; border-radius: 10px; padding: 10px 14px; display: none; font-weight: 600; }
 </style>
@@ -85,8 +102,12 @@
   <span class="brand">Lantern</span>
   <span class="live" id="live" hidden>LIVE</span>
   <span class="show" id="show"></span>
+  <a class="stagelink" id="stageLink" href="/stage" target="_blank">Stage view</a>
   <span class="clock" id="clock">--:--:--</span>
 </header>
+
+<main class="layout">
+<div class="left">
 
 <div class="pics">
   <div class="now">
@@ -109,6 +130,9 @@
   <button class="blackout" id="blackout">Blackout</button>
   <button class="video" id="video" hidden>Play / pause video</button>
 </div>
+</div>
+
+<div class="right">
 
 <div class="section">
   <h2>COUNTDOWN · STAGE</h2>
@@ -124,7 +148,7 @@
   <div class="onstage" id="onstage"><span id="onstageText"></span><button id="clearMsg">Clear</button></div>
 </div>
 
-<div class="section">
+<div class="section notesSection">
   <h2>NOTES</h2>
   <div class="notes none" id="notes">No notes on this slide</div>
 </div>
@@ -133,6 +157,8 @@
   <summary>More</summary>
   <button class="reset" id="reset">Reset – back to black before the first slide</button>
 </details>
+</div>
+</main>
 
 <div class="overlay" id="pinBox">
   <div class="box">

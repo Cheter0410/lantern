@@ -6,6 +6,12 @@ use super::*;
 use crate::osc::StageCmd;
 use crate::stage::{fmt_countdown, Message, Timer};
 
+#[path = "app_stage_out.rs"]
+mod out;
+pub(super) use out::StageOut;
+#[cfg(test)]
+pub(super) use out::StageRender;
+
 pub(super) struct StageNow {
     pub(super) timer: Timer,
     pub(super) message: Option<Message>,
@@ -59,6 +65,21 @@ impl StageScene {
     pub(super) fn timer_parts(&self) -> (String, Color32) {
         (self.timer.clone(), self.timer_color)
     }
+
+    /// What the stage page in a browser shows besides the remote's state.
+    pub(super) fn web_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "slide": self.slide,
+            "on_slide": self.on_slide,
+            "timecode": self.timecode,
+            "timer_state": self.timer_state,
+            "flashing": self.message.as_ref().is_some_and(|(_, p)| *p > 0.0),
+            "next_label": self.next_label,
+            "show_next": self.show_next,
+            "show_notes": self.show_notes,
+            "notes_size": self.notes_size,
+        })
+    }
 }
 
 const STAGE_BG: Color32 = Color32::from_rgb(6, 7, 9);
@@ -80,6 +101,14 @@ impl App {
                 s.timer.reset(m.unwrap_or(minutes));
             }
         }
+    }
+
+    /// The stage display is seen somewhere: on a display, over NDI or in a browser. Then its
+    /// message and countdown controls are under the notes.
+    pub(super) fn stage_shown(&self) -> bool {
+        self.show.stage.display.is_some()
+            || self.show.stage.ndi
+            || self.web.server.as_ref().is_some_and(|s| s.stage_clients() > 0)
     }
 
     pub(super) fn stage_scene(&self) -> StageScene {
@@ -377,7 +406,86 @@ impl App {
                     ui.label(RichText::new("left").color(MUTED));
                 });
                 ui.end_row();
+                ui.label(RichText::new("NDI").color(MUTED));
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut c.ndi, "Send as NDI source")
+                        .on_hover_text("For a monitor, a recorder or a vision mixer anywhere in the network");
+                    ui.add_enabled_ui(c.ndi, |ui| {
+                        ui.add(egui::TextEdit::singleline(&mut c.ndi_name).desired_width(150.0));
+                        for (h, label) in [(720, "720p"), (1080, "1080p")] {
+                            if ui.selectable_label(c.ndi_size().1 == h, label).clicked() {
+                                c.ndi_height = h;
+                            }
+                        }
+                    });
+                });
+                ui.end_row();
             });
+        if self.show.stage.ndi {
+            let (text, color) = match (&self.stage_out.error, &self.stage_out.sender) {
+                (Some(e), _) => (e.clone(), DANGER),
+                (None, Some(s)) => {
+                    let who = match s.receivers() {
+                        Some(0) => " · nobody watching (nothing sent over the network)".to_string(),
+                        Some(1) => " · 1 receiver".to_string(),
+                        Some(n) => format!(" · {n} receivers"),
+                        None => String::new(),
+                    };
+                    let (w, h) = s.size;
+                    (format!("Sending \"{}\" {w}×{h}, 25 fps{who}", s.name), OK)
+                }
+                (None, None) => ("Starting…".to_string(), MUTED),
+            };
+            ui.label(RichText::new(text).small().color(color));
+            ui.label(
+                RichText::new(
+                    "NDI sends full pictures: about 60 Mbit/s at 720p and 120 Mbit/s at 1080p for each \
+                     receiver – fine on a wired gigabit network, too much for Wi-Fi. For an iPad use \
+                     the browser below.",
+                )
+                .small()
+                .color(MUTED),
+            );
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Browser").color(MUTED));
+            match (self.show.web.enabled, self.web.server.as_ref()) {
+                (true, Some(srv)) => {
+                    let base = self.net.web_url().unwrap_or_else(|| {
+                        format!("http://{}:{}", local_ip().unwrap_or_else(|| "localhost".into()), srv.port)
+                    });
+                    ui.label(RichText::new(format!("{base}/stage")).monospace().strong());
+                    let n = srv.stage_clients();
+                    if n > 0 {
+                        status(ui, &format!("{n} watching"), OK);
+                    }
+                }
+                _ => {
+                    ui.label(
+                        RichText::new("Turn on the web remote (Settings › Network) to open the stage display on an iPad or any browser.")
+                            .small()
+                            .color(MUTED),
+                    );
+                }
+            }
+        });
+        ui.add_space(6.0);
+        // The countdown can be run from here too, also when no stage display is on yet.
+        ui.horizontal(|ui| {
+            let minutes = self.show.stage.timer_minutes;
+            let s = self.stage_scene();
+            ui.label(RichText::new("Countdown").color(MUTED));
+            ui.label(RichText::new(&s.timer).monospace().size(17.0).strong().color(s.timer_color));
+            ui.label(RichText::new(s.timer_state).small().color(MUTED));
+            let running = self.stage.timer.running();
+            if ui.button(if running { "Pause" } else { "Start" }).clicked() {
+                self.stage.timer.toggle();
+            }
+            if ui.button("Reset").on_hover_text(format!("Back to {minutes}:00")).clicked() {
+                self.stage.timer.reset(minutes);
+            }
+        });
         ui.add_space(10.0);
         let w = ui.available_width().min(470.0);
         let (r, _) = ui.allocate_exact_size(Vec2::new(w, w * 9.0 / 16.0), Sense::hover());
@@ -389,7 +497,7 @@ impl App {
         ui.label(
             RichText::new(
                 "For the speaker or stage manager. Messages and the countdown are set under the \
-                 notes while it is on, and over OSC: /lantern/stage/message \"text\", \
+                 notes while it is on (display, NDI or browser), in the web remote, and over OSC: /lantern/stage/message \"text\", \
                  /lantern/stage/clear, /lantern/timer/start, /timer/pause, /timer/toggle, \
                  /timer/reset [minutes].",
             )

@@ -18,6 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const PAGE: &str = include_str!("web_remote.html");
+/// The stage display in a browser (an iPad on a stand): the same JSON and pictures as the remote,
+/// so it needs only a few kilobytes a second, not a video stream.
+const STAGE_PAGE: &str = include_str!("web_stage.html");
 
 /// Clients seen within this count as connected.
 const SEEN: Duration = Duration::from_secs(5);
@@ -36,6 +39,8 @@ struct Shared {
     pics: [Option<Pic>; 2],
     pin: String,
     clients: HashMap<IpAddr, Instant>,
+    /// Devices showing the stage page.
+    stage_clients: HashMap<IpAddr, Instant>,
 }
 
 pub struct Server {
@@ -128,6 +133,14 @@ impl Server {
                 Some(_) => {}
             }
         }
+    }
+
+    /// Devices showing the stage page within the last seconds.
+    pub fn stage_clients(&self) -> usize {
+        self.shared
+            .lock()
+            .map(|s| s.stage_clients.values().filter(|t| t.elapsed() < SEEN).count())
+            .unwrap_or(0)
     }
 
     /// Devices that asked within the last seconds.
@@ -268,6 +281,9 @@ fn serve(
     let Some(req) = read_request(&mut stream) else {
         return Ok(());
     };
+    if req.path == "/stage" || req.path == "/stage/" {
+        return respond(&mut stream, "200 OK", "text/html; charset=utf-8", STAGE_PAGE.as_bytes());
+    }
     if req.path == "/" || req.path == "/index.html" {
         return respond(
             &mut stream,
@@ -289,8 +305,13 @@ fn serve(
             .unwrap_or("");
         let ok = s.pin.is_empty() || given == s.pin;
         if ok {
-            s.clients.insert(peer.ip(), Instant::now());
-            s.clients.retain(|_, t| t.elapsed() < SEEN * 4);
+            if req.query.get("view").is_some_and(|v| v == "stage") {
+                s.stage_clients.insert(peer.ip(), Instant::now());
+                s.stage_clients.retain(|_, t| t.elapsed() < SEEN * 4);
+            } else {
+                s.clients.insert(peer.ip(), Instant::now());
+                s.clients.retain(|_, t| t.elapsed() < SEEN * 4);
+            }
         }
         ok
     };
@@ -422,6 +443,13 @@ mod tests {
             Command::Stage(StageCmd::Message("Wrap up, please".into()))
         );
         assert_eq!(http(port, "POST", "/api/explode", "", "").0, 404);
+
+        // The stage page: its own page, its viewers counted apart.
+        let (code, page) = http(port, "GET", "/stage", "", "");
+        assert_eq!(code, 200);
+        assert!(String::from_utf8_lossy(&page).contains("Lantern Stage"));
+        assert_eq!(http(port, "GET", "/api/state?view=stage", "", "").0, 200);
+        assert_eq!(srv.stage_clients(), 1);
 
         // With a PIN: nothing without it, everything with it.
         srv.set_pin("4711");

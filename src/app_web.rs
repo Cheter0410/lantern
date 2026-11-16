@@ -105,6 +105,7 @@ impl App {
             "timer_color": hex(scene_timer(&scene).1),
             "timer_running": self.stage.timer.running(),
             "message": self.stage.message.as_ref().map(|m| m.text.clone()),
+            "stage": scene.web_json(),
         });
         server.set_state(state.to_string());
     }
@@ -205,7 +206,17 @@ impl App {
             ui.add_space(10.0);
             ui.vertical(|ui| {
                 ui.label(RichText::new("Scan with the phone, or open:").color(MUTED));
-                ui.label(RichText::new(&url).monospace().size(16.0).strong());
+                // The name works on Apple devices and most computers and stays the same when the
+                // address changes; the address works everywhere.
+                let named = self.net.web_url();
+                if let Some(n) = &named {
+                    ui.label(RichText::new(n).monospace().size(16.0).strong());
+                    ui.label(RichText::new(format!("or {url}")).monospace().color(MUTED));
+                } else {
+                    ui.label(RichText::new(&url).monospace().size(16.0).strong());
+                }
+                let stage = format!("{}/stage", named.as_deref().unwrap_or(&url));
+                ui.label(RichText::new(format!("Stage display in a browser (iPad): {stage}")).small().color(MUTED));
                 ui.add_space(4.0);
                 let n = self.web.server.as_ref().map_or(0, |s| s.clients());
                 let (text, color) = match n {

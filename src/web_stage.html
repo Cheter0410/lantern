@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#060709">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Lantern Stage</title>
+<style>
+  /* The stage display of Lantern, for an iPad or any screen with a browser. Sizes follow the
+     smaller side of the screen, like the stage display follows its height. */
+  :root {
+    --bg: #060709; --cell: #0a0b0e; --notes: #101216; --text: #e8ebef; --muted: #8a909e;
+    --now: #3b82f6; --next: #22c55e; --tc: #60a5fa; --amber: #ffc45c; --red: #ef4444;
+    --k: min(1vh, 0.5625vw);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { padding: calc(2.6 * var(--k)); padding-top: max(calc(2.6 * var(--k)), env(safe-area-inset-top));
+    display: flex; flex-direction: column; gap: calc(1.9 * var(--k)); cursor: none; }
+  .top { display: flex; gap: calc(1.9 * var(--k)); flex: none; }
+  .cell { flex: 1; min-width: 0; background: var(--cell); border-radius: calc(1.1 * var(--k));
+    height: calc(13.9 * var(--k)); padding: calc(1.5 * var(--k)) calc(1.9 * var(--k)); display: flex; flex-direction: column; }
+  .cap { display: flex; justify-content: space-between; color: var(--muted); font-size: calc(1.9 * var(--k)); }
+  .val { flex: 1; display: grid; place-items: center; font: 700 calc(7.4 * var(--k)) ui-monospace, Menlo, monospace;
+    white-space: nowrap; overflow: hidden; }
+  .msg { flex: none; background: var(--amber); color: #000; border-radius: calc(1.3 * var(--k));
+    padding: calc(2 * var(--k)) calc(2.8 * var(--k)); font-size: calc(5.6 * var(--k)); font-weight: 600;
+    max-height: calc(30 * var(--k)); overflow: hidden; display: none; }
+  .msg.flash { animation: flash .83s ease-in-out infinite; }
+  @keyframes flash { 50% { background: #fff3dc; } }
+  .pics { flex: 1 1 56%; min-height: 0; display: flex; gap: calc(1.9 * var(--k)); justify-content: center; }
+  .pics .col { display: flex; flex-direction: column; min-width: 0; flex: none; }
+  .label { font-size: calc(2.2 * var(--k)); font-weight: 600; height: calc(3.2 * var(--k)); display: flex; gap: calc(1.5 * var(--k)); }
+  .now .label { color: var(--now); } .next .label { color: var(--next); }
+  .label span { color: var(--muted); font-weight: 400; }
+  .frame { position: relative; background: #000; border-radius: calc(.4 * var(--k)); }
+  .now .frame { outline: calc(.28 * var(--k)) solid var(--now); }
+  .next .frame { outline: calc(.19 * var(--k)) solid var(--next); }
+  .frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; }
+  .frame .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: calc(3.7 * var(--k)); }
+  .frame.black { outline-color: var(--red); }
+  .frame.black::after { content: "BLACKOUT"; position: absolute; inset: 0; display: grid; place-items: center;
+    background: #000; color: var(--red); font-size: calc(5.2 * var(--k)); }
+  .title { font-size: calc(2.8 * var(--k)); margin-top: calc(1.1 * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notes { flex: 1 1 44%; min-height: 0; background: var(--notes); border-radius: calc(1.1 * var(--k));
+    padding: calc(1.5 * var(--k)) calc(2 * var(--k)); display: flex; flex-direction: column; overflow: hidden; }
+  .notes .cap { flex: none; margin-bottom: calc(1 * var(--k)); }
+  .notes .text { flex: 1; min-height: 0; overflow: hidden; white-space: pre-wrap; line-height: 1.25; }
+  .notes .text.none { color: #5a5a5a; }
+  .lost { position: fixed; left: 2vw; right: 2vw; bottom: 2vh; background: var(--red); color: #fff; border-radius: 10px;
+    padding: 10px 14px; display: none; font-weight: 600; font-size: 16px; }
+  .overlay { position: fixed; inset: 0; background: rgba(6,7,9,.96); display: none; place-items: center; cursor: auto; }
+  .overlay .box { background: #14161b; border-radius: 14px; padding: 22px; width: min(340px, 90vw); text-align: center; }
+  .overlay input { font: 600 26px ui-monospace, Menlo, monospace; text-align: center; width: 100%; margin: 14px 0;
+    padding: 10px; border-radius: 8px; border: 1px solid #2c303a; background: var(--bg); color: var(--text); letter-spacing: .3em; }
+  .overlay button { width: 100%; font: 700 16px sans-serif; background: var(--amber); color: #000; border: 0;
+    border-radius: 10px; min-height: 48px; }
+  .hint { position: fixed; right: 2vw; top: 1vh; color: var(--muted); font-size: 13px; opacity: 0; transition: opacity .4s; }
+  body:hover .hint { opacity: .7; }
+</style>
+</head>
+<body>
+<div class="top" id="top"></div>
+<div class="msg" id="msg"></div>
+<div class="pics" id="pics">
+  <div class="col now">
+    <div class="label">NOW</div>
+    <div class="frame" id="nowFrame"><img id="nowImg" alt=""><div class="empty" id="nowEmpty"></div></div>
+  </div>
+  <div class="col next" id="nextCol">
+    <div class="label">NEXT <span id="nextLabel"></span></div>
+    <div class="frame" id="nextFrame"><img id="nextImg" alt=""><div class="empty" id="nextEmpty"></div></div>
+    <div class="title" id="nextTitle"></div>
+  </div>
+</div>
+<div class="notes" id="notesBox"><div class="cap">NOTES</div><div class="text" id="notes"></div></div>
+<div class="hint">Tap to go full screen</div>
+
+<div class="overlay" id="pinBox">
+  <div class="box">
+    <div style="color:var(--amber);font-weight:700;font-size:18px">Lantern Stage</div>
+    <div style="color:var(--muted);margin-top:6px;font-size:14px">Enter the PIN shown in Lantern under Settings › Network.</div>
+    <input id="pin" inputmode="numeric" autocomplete="off" maxlength="12">
+    <button id="pinOk">Connect</button>
+  </div>
+</div>
+<div class="lost" id="lost">Connection to Lantern lost – trying again…</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let pin = localStorage.getItem("lantern-pin") || "";
+let last = { now: -1, next: -1 };
+
+function askPin() { $("pinBox").style.display = "grid"; $("pin").focus(); }
+$("pinOk").onclick = () => {
+  pin = $("pin").value.trim();
+  localStorage.setItem("lantern-pin", pin);
+  $("pinBox").style.display = "none";
+  last = { now: -1, next: -1 };
+  poll();
+};
+$("pin").addEventListener("keydown", e => { if (e.key === "Enter") $("pinOk").click(); });
+document.body.addEventListener("click", e => {
+  if (e.target.closest(".overlay")) return;
+  const d = document.documentElement;
+  if (!document.fullscreenElement && d.requestFullscreen) d.requestFullscreen().catch(() => {});
+});
+
+function pic(which, id, empty) {
+  const img = $(which + "Img"), e = $(which + "Empty");
+  e.textContent = empty;
+  if (id === null || id === undefined) { img.style.display = "none"; e.style.display = "grid"; last[which] = -1; return; }
+  if (last[which] !== id) {
+    last[which] = id;
+    img.onload = () => { img.style.display = "block"; e.style.display = "none"; };
+    img.src = "/img/" + which + "?v=" + id + "&pin=" + encodeURIComponent(pin);
+  }
+}
+
+function cell(cap, sub, val, color) {
+  const c = document.createElement("div");
+  c.className = "cell";
+  const h = document.createElement("div");
+  h.className = "cap";
+  const a = document.createElement("span"); a.textContent = cap;
+  const b = document.createElement("span"); b.textContent = sub || "";
+  h.append(a, b);
+  const v = document.createElement("div");
+  v.className = "val"; v.textContent = val; v.style.color = color;
+  c.append(h, v);
+  return c;
+}
+
+function render(s) {
+  const st = s.stage || {};
+  const cells = [cell("TIME", "", s.clock, "var(--text)"), cell("SLIDE", st.on_slide, st.slide, "var(--now)")];
+  if (st.timecode) cells.push(cell("TIMECODE", "", st.timecode, "var(--tc)"));
+  cells.push(cell("COUNTDOWN", st.timer_state, s.timer, s.timer_color));
+  $("top").replaceChildren(...cells);
+  const m = $("msg");
+  m.style.display = s.message ? "block" : "none";
+  m.textContent = s.message || "";
+  m.classList.toggle("flash", !!st.flashing);
+  pic("now", s.slide ? s.pic_now : null, s.slide ? "" : "Black");
+  pic("next", s.next ? s.pic_next : null, st.next_label || "End");
+  $("nowFrame").classList.toggle("black", !!s.blackout);
+  $("nextCol").style.display = st.show_next === false ? "none" : "flex";
+  $("nextLabel").textContent = st.next_label || "";
+  $("nextTitle").textContent = s.next_title || "";
+  const nb = $("notesBox");
+  nb.style.display = st.show_notes === false ? "none" : "flex";
+  $("pics").style.flexBasis = st.show_notes === false ? "100%" : "56%";
+  const n = $("notes");
+  n.textContent = s.notes || "No notes on this slide";
+  n.classList.toggle("none", !s.notes);
+  fitNotes(st.notes_size || 44);
+  fitPics(st.show_next !== false);
+}
+
+/* Now and next as large as the room allows, next at 0.6 of now beside it (like the stage display). */
+function fitPics(next) {
+  const box = $("pics"), k = Math.min(window.innerHeight / 100, window.innerWidth * 0.005625);
+  const gap = 1.9 * k, label = 3.2 * k, title = next ? 4.4 * k : 0;
+  const w = box.clientWidth, h = box.clientHeight - label - title;
+  const scale = next ? 1.6 : 1.0;
+  const nowW = Math.max(10, Math.min((w - (next ? gap : 0)) / scale, h * 16 / 9));
+  const set = (id, fw) => { const f = $(id); f.style.width = fw + "px"; f.style.height = fw * 9 / 16 + "px"; };
+  set("nowFrame", nowW);
+  set("nextFrame", nowW * 0.6);
+  document.querySelector(".pics .now").style.width = nowW + "px";
+  $("nextCol").style.width = nowW * 0.6 + "px";
+}
+
+/* Notes as large as fits, like on the stage display (sizes are for a 1080-line screen). */
+function fitNotes(size) {
+  const n = $("notes");
+  const k = Math.min(window.innerHeight / 100, window.innerWidth * 0.005625);
+  let px = size / 10.8 * k;
+  n.style.fontSize = px + "px";
+  while (n.scrollHeight > n.clientHeight + 1 && px > 20 / 10.8 * k) {
+    px *= 0.92;
+    n.style.fontSize = px + "px";
+  }
+}
+
+let busy = false;
+async function poll() {
+  if (busy) return;
+  busy = true;
+  try {
+    const r = await fetch("/api/state?view=stage", { headers: { "X-Pin": pin }, cache: "no-store" });
+    if (r.status === 403) askPin();
+    else if (r.ok) { render(await r.json()); $("lost").style.display = "none"; }
+  } catch (e) { $("lost").style.display = "block"; }
+  busy = false;
+}
+poll();
+setInterval(poll, 500);
+window.addEventListener("resize", poll);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+</script>
+</body>
+</html>

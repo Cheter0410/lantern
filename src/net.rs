@@ -31,12 +31,14 @@ impl Net {
     }
 
     /// Keep the announcements in line (cheap; call every frame).
-    pub fn update(&mut self, osc_port: Option<u16>, rtp: Option<(String, u16)>) {
+    /// `web_port`: the web remote, announced as `http://lantern.local:<port>`.
+    pub fn update(&mut self, osc_port: Option<u16>, rtp: Option<(String, u16)>, web_port: Option<u16>) {
         if self.at.elapsed() < Duration::from_millis(250) {
             return;
         }
         self.at = Instant::now();
         let want = Desired {
+            http_port: web_port,
             lantern: osc_port.map(|port| RtpAdvert {
                 name: self.name.clone(),
                 port,
@@ -60,6 +62,11 @@ impl Net {
             .into_iter()
             .map(|d| (d.name, d.addr))
             .collect()
+    }
+
+    /// The web remote's name address (`http://lantern.local:8090`) while it is announced.
+    pub fn web_url(&self) -> Option<String> {
+        self.mdns.status().url
     }
 
     /// A problem with the network announcement, if any.
