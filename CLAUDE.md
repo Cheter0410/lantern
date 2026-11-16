@@ -77,5 +77,4 @@ UI tests use their own settings folder – they never touch the real Lantern set
 - Changes to the window: check them with a UI test and its screenshots (small windows too).
 - `crates/sm-timecode`, `sm-rtpmidi`, `sm-mdns` are copies from Show Master – a fix in one usually
   belongs in the other too.
-- Two `.DS_Store` files are tracked by mistake; leave them, don't add more.
 - `scripts/setup.sh` is the same file in Show Master, Showtime Suite and here – change all three together.

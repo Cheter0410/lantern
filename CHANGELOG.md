@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.6
+
+- CLAUDE.md: the note about tracked `.DS_Store` files is gone (they are no longer in the repository).
+
 ## 0.11.5
 
 - The macOS Finder files (`.DS_Store`) are no longer in the repository, so installing no longer reports local changes.
